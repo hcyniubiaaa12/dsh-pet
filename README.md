@@ -26,7 +26,19 @@ AI 生成动画的配方     源视频 → 透明动画的管线    运行在 DS
 
 ---
 
-## 快速开始（安装插件）
+## 快速开始
+
+### 🪟 Windows 安装版（不需要 DSH，也不需要 Node）
+
+**只想在 Windows 桌面上养宠物？** 不用装 DSH、不用 Node、不用命令行——下载安装包双击安装即可：
+
+**[⬇️ 下载 Windows 安装版（.msi）](https://github.com/hcyniubiaaa12/dsh-pet/releases/latest)**
+
+安装包内置 Electron 运行时与全部动画素材，**断网也能安装与启动**；装完宠物出现在桌面，托盘常驻。首次运行若遇到 SmartScreen「未知发布者」，点「更多信息 → 仍要运行」。
+
+完整步骤、可用功能、数据目录与卸载方式见 **[Windows 安装版](#-windows-安装版)** 一节。
+
+### 🧩 作为 DSH 插件安装
 
 装法取决于你在用哪个 DSH：
 
@@ -184,12 +196,16 @@ npm run build && npm run standalone   # 仓库里（先构建）
 
 ### 下载与安装
 
-1. 拿到 `dsh-pet-Setup-<version>.exe`（如 `dsh-pet-Setup-0.3.7.exe`），双击运行。
-2. 按向导「下一步 → 下一步 → 安装」；安装目录可改（默认 `%LOCALAPPDATA%\Programs\DSH Pet`）。
-3. 完成后可勾选「立即运行」；之后从开始菜单或桌面快捷方式启动即可。
+从 **[Releases](https://github.com/hcyniubiaaa12/dsh-pet/releases/latest)** 下载 `dsh-pet-Setup-<version>.msi`，双击安装即可（Windows Installer 会自动完成安装，默认装到 `%LOCALAPPDATA%\Programs\DSH Pet`）。
+
+1. 双击 `.msi`，按 Windows Installer 提示完成安装。
+2. 安装完成后从开始菜单或桌面快捷方式启动；托盘常驻。
+3. **不需要 DSH，也不需要 Node**：Electron 运行时与全部素材都在包里，首次启动不联网下载。
 
 - 每用户安装，不请求管理员权限（不弹 UAC）。
-- 安装包约 162MB（0.3.7 实测），Electron 与素材都在包里，首次启动不需要联网下载。
+- 安装包约 162MB（0.3.7 实测）。
+- MSI 是 NSIS 安装包的 Windows Installer 封装：卸载请用「设置 → 应用 → DSH Pet」或安装目录下的 `Uninstall DSH Pet.exe`（不要用 `msiexec /x`，它没有注册为独立 MSI 产品）。
+- 需要自定义安装目录或使用安装向导时，可从同一 Release 的构建产物使用 `.exe`（维护者本地构建；Release 默认只分发 `.msi`）。
 
 ### 首次启动：SmartScreen 提示
 
@@ -260,7 +276,8 @@ pnpm install
 npm run dist        # = npm run build && node scripts/dist.mjs
 ```
 
-- **产物**：`dsh-pet/dist/dsh-pet-Setup-<version>.exe`；`dist/` 已被 gitignore，构建后手动分发。同目录的 `dist/win-unpacked/DSH Pet.exe` 可直接运行，用于冒烟测试。
+- **产物**：`dsh-pet/dist/dsh-pet-Setup-<version>.msi` 是发布物（NSIS 安装包的 Windows Installer 封装）；`dsh-pet-Setup-<version>.exe` 是同一次构建的 NSIS 原始安装包（需要安装向导或自定义安装目录时使用）。`dist/` 已被 gitignore，构建后手动分发；`dist/win-unpacked/DSH Pet.exe` 可直接运行用于冒烟测试。
+- **MSI 目标**：`electron-builder.yml` 的 `win.target` 同时声明 `nsis` 与 `msiwrapped`；后者必须排在 `nsis` 之后（它封装前者的产物）。首次构建会下载 WiX 4（约数十 MB），之后走缓存。
 - **前置**：Node.js ≥ 22.12 与 pnpm；首次构建时 electron-builder 会下载 NSIS 打包工具（需要网络，之后走缓存）。本机 `~/.dsh/electron` 存在时会作为 `electronDist` 直接复用，不重复下载 Electron；不存在时回退到 electron-builder 下载（`scripts/dist.mjs` 会把镜像指向 npmmirror）。
 - **体积**：安装包排除 `assets/preview`（README 展示用 GIF，约 65MB），0.3.7 实测约 162MB。
 - **不做代码签名**：没有购买证书，也避免引入签名与分发的额外复杂度；代价是 SmartScreen 会提示「未知发布者」（见上）。同时不做自动更新与 CI 构建——安装包本地构建后手动分发；升级 = 运行新版安装包覆盖安装，用户数据与自启状态保留。

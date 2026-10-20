@@ -10,7 +10,8 @@
  *      并把镜像指向 npmmirror（国内网络下 GitHub 直连常不可用）。
  *   2. 调用 electron-builder（配置在 electron-builder.yml：NSIS、每用户安装、files 白名单）。
  *
- * 产物：dist/dsh-pet-Setup-<version>.exe（dist/ 已被仓库根 .gitignore 忽略）。
+ * 产物：dist/dsh-pet-Setup-<version>.exe 与 dist/dsh-pet-Setup-<version>.msi
+ * （dist/ 已被仓库根 .gitignore 忽略；MSI 是同一个 NSIS 安装包的封装）。
  *
  * 用法：npm run dist
  */
@@ -52,7 +53,9 @@ function electronBuilderCli() {
 }
 
 const electronExe = localElectronExe();
-const args = [electronBuilderCli(), '--win', 'nsis', '--config', CONFIG, '--publish', 'never'];
+// 不在这里写死 target：electron-builder.yml 的 win.target 同时声明 nsis 与 msi-wrapped，
+// 且 msi-wrapped 必须在 nsis 之后构建（它把 NSIS 产物封装成 MSI）。
+const args = [electronBuilderCli(), '--win', '--config', CONFIG, '--publish', 'never'];
 
 if (electronExe) {
   // electronDist 指向解压目录（electron.exe 所在目录），electron-builder 直接复制并改名。
