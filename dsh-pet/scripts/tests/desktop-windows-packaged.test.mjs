@@ -118,7 +118,7 @@ test(
 
     const userDataDir = mkdtempSync(join(tmpdir(), 'dsh-pet-packaged-'));
     let app;
-    let processExited = false;
+    let processExited;
     try {
       const env = {
         ...process.env,

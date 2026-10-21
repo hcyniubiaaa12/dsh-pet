@@ -80,6 +80,10 @@ nsis:
 
 # MSI 入口（Windows Installer）：内部仍是同一个 NSIS 安装包，行为与 exe 完全一致。
 # oneClick/perMachine 只影响外层 MSI 的呈现；实际安装细节由 nsis 段决定。
+#
+# 限制与陷阱见仓库根 docs/installer.md「MSI（msiwrapped）」——模板不可覆盖、不含目录页，
+# 因此这里的安装目录只能是默认值；让用户在 MSI 里选目录需要自建 WiX 工程
+# （见 .scratch/installer-customization/）。
 msiWrapped:
   artifactName: dsh-pet-Setup-${version}.${ext}
   oneClick: false
