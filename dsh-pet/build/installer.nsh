@@ -25,6 +25,54 @@
 
 !include LogicLib.nsh
 
+; ---------------------------------------------------------------------------
+; 安装前检查：应用正在运行时，**先明确告诉用户**再关闭它。
+;
+; 为什么必须覆盖默认实现：electron-builder 的 CHECK_APP_RUNNING 在发现应用在跑时会弹
+; 「DSH Pet 正在运行，点击确定关闭」并等用户点。这在 MSI（msiwrapped 把本安装包封进 WiX）
+; 里变成灾难：外层 MSI 没有界面，用户看到的是安装卡住/长时间无响应；而且开机自启让
+; 「安装时应用正在运行」几乎必然发生。
+;
+; 这里换成：
+;   1. 一句有人话上下文的确认框（说明会关闭、装完会重新启动）；
+;   2. 用户同意后结束进程并等它退干净；
+;   3. 用户取消 → 中止安装。
+;
+; 定义这个宏之后，electron-builder 的 CHECK_APP_RUNNING 会优先调用它（见
+; allowOnlyOneInstallerInstance.nsh 的 !ifmacrodef customCheckAppRunning）。
+; 注意两条容易踩的反直觉约定：
+;   - 默认分支才会 insert IS_POWERSHELL_AVAILABLE，而 FIND_PROCESS / KILL_PROCESS 都依赖它
+;     设置的 $IsPowerShellAvailable —— 自定义分支必须自己先 insert 一次；
+;   - FIND_PROCESS 的返回值 **0 = 找到进程**（PowerShell 判到即 exit 0），非 0 才是没在跑。
+; ---------------------------------------------------------------------------
+!macro customCheckAppRunning
+  !insertmacro IS_POWERSHELL_AVAILABLE
+  ; 先声明 KILL_PROCESS 用到的 $pid（默认分支由 _CHECK_APP_RUNNING 的 GetProcessInfo 声明；
+  ; 走自定义分支时没有那一步，不声明会得到 warning 6000，而 electron-builder 把 warning 当错误）
+  Var /GLOBAL pid
+  StrCpy $pid 0
+  !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+  ${If} $R0 == 0
+    ; 静默安装（MSI 的 wrappedInstallerArgs、/S、CI）没有用户可点：不能弹框，
+    ; 也不能因为应用关不掉就让安装挂住——直接结束进程继续装。
+    ${IfNot} ${Silent}
+      MessageBox MB_YESNO|MB_ICONQUESTION \
+        "安装将关闭正在运行的 ${PRODUCT_NAME}，安装完成后会自动重新启动。$\r$\n$\r$\n继续安装吗？" \
+        /SD IDYES IDYES closeRunningApp
+      Quit ; 用户选择「否」：中止安装，不动正在运行的实例
+    ${EndIf}
+
+    closeRunningApp:
+    !insertmacro KILL_PROCESS "${APP_EXECUTABLE_FILENAME}" 1
+    Sleep 1000
+    ; 给窗口/文件句柄一点时间释放，避免紧接着的写入撞上「文件正在使用」
+    !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+    ${If} $R0 == 0
+      Sleep 2000
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 ; 安装完成：默认开启开机自启（只对从未初始化过的用户生效）。
 ;
 ; 标记文件与 src/host/autostart.ts 的 `autostart-initialized` 是同一个：

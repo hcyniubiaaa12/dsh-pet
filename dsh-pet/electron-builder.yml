@@ -85,8 +85,9 @@ msiWrapped:
   oneClick: false
   perMachine: false
   # 内部 NSIS 静默执行：外层 MSI 负责进度/取消，避免用户看到「MSI 界面 → NSIS 向导」两层安装界面。
+  # --force-run 让静默安装结束时重新启动应用（否则 MSI 装完桌面上什么都没发生）。
   # 安装目录用默认值；需要选目录的高级用户请用同目录构建出的 .exe。
-  wrappedInstallerArgs: '/S'
+  wrappedInstallerArgs: '/S --force-run'
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: DSH Pet
