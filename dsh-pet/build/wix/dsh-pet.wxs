@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DSH Pet 的 MSI 外壳（ticket 01）。
+
+  它**不安装应用文件**：真正的安装仍由内层 NSIS 包（electron-builder 产出）完成，
+  本 MSI 只负责向导与「装到哪儿」这一件事 —— 这正是 msiwrapped 做不到的
+  （它的模板不可覆盖、没有 <UI>、没有安装目录变量）。
+
+  实际使用方式见 scripts/build-msi.mjs（编译参数）与 docs/installer.md（约定与陷阱）。
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Product
+    Id="DF002AC3-A79E-5B6E-8E25-0E60B019E6A7"
+    Name="DSH Pet"
+    UpgradeCode="86667C27-B0EB-53CD-BFE0-8D3AC470B948"
+    Version="$(var.ProductVersion)"
+    Language="1033"
+    Codepage="65001"
+    Manufacturer="DSH Pet"
+  >
+    <Package Compressed="yes" InstallerVersion="500" InstallScope="perUser" />
+
+    <!-- 每用户安装：内层 NSIS 必须与当前用户身份一致，否则会装进 SYSTEM 的 profile。 -->
+    <Property Id="MSIINSTALLPERUSER" Secure="yes" Value="1" />
+
+    <!--
+      安装目录**只**放在 APPLICATIONFOLDER 里（WIXUI_INSTALLDIR 指向它），不再另设
+      INSTALLDIR 属性 —— 两个属性会互相覆盖：目录页把选择写进 APPLICATIONFOLDER，
+      而 msiexec 命令行传的是 INSTALLDIR，谁后写谁生效。
+      命令行的 `INSTALLDIR="D:\Apps\DSH Pet"` 经下面的 SetProperty 同义转换；
+      目录页每次翻页也把 APPLICATIONFOLDER 同步回 INSTALLDIR（见 UI 段的 Publish），
+      让同一个属性名对用户、对内层 NSIS、对命令行都成立。
+
+      Secure="yes" 是必须的：deferred 自定义动作读不到未标记 Secure 的属性。
+    -->
+    <Property Id="APPLICATIONFOLDER" Secure="yes" />
+    <Property Id="INSTALLDIR" Secure="yes" />
+
+    <!-- 预检失败时由自定义动作写入的可读说明；非空即表示「留在当前页」。 -->
+    <Property Id="DSHPET_DIR_ERROR" Secure="yes" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- 安装位置页：WixUI_InstallDir 用 WIXUI_INSTALLDIR 决定输入框读写哪个目录属性。 -->
+    <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- 默认值 = %LOCALAPPDATA%\Programs\DSH Pet（per-user，不提权）。 -->
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsDir" Name="Programs">
+          <Directory Id="APPLICATIONFOLDER" Name="DSH Pet" />
+        </Directory>
+        <!--
+          外层 MSI 不装文件，这个 dummy Component 只用来满足 Feature 的结构要求。
+          KeyPath 必须是 HKCU 注册表值而不是目录（ICE38）：组件装在用户 profile 下时，
+          用目录/文件当 KeyPath 会被判为不可靠的每用户组件。
+        -->
+        <Directory Id="TempFolder">
+          <Component Id="EmptyComponent" Guid="7145262D-7149-4F1A-9A69-F377E38F04DA">
+            <RegistryValue Root="HKCU" Key="Software\DSH Pet\MSI" Name="Wrapped" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- Level="0" 让 Feature 不可安装 → MSI 不会被登记为已安装产品，
+         「设置 → 应用」里只出现内层 NSIS 注册的卸载项（与 msiwrapped 语义一致）。 -->
+    <Feature Id="EmptyFeature" Level="0">
+      <ComponentRef Id="EmptyComponent" />
+    </Feature>
+
+    <!--
+      内层 NSIS 安装包：编译时以 -dWrappedExe=<dist 里的 Setup.exe> 嵌成二进制资源。
+      命令行的 /S 与 force-run 开关与原先 msiwrapped 的 wrappedInstallerArgs 逐字一致 ——
+      静默执行，用户看不到第二层向导，装完自动启动应用。
+
+      安装目录走两条通道，互为退路：
+        1. /D= 参数：electron-builder 的 multiUser.nsh 会从整条命令行里截取 /D= 之后的内容，
+           所以它必须排在最后、且整体带引号（路径里有空格）。
+        2. 注册表 InstallLocation：NSIS 的 setInstallModePerUser 优先读
+           HKCU\Software\${APP_GUID}\InstallLocation。这里由 SetInstallLocation 写入，
+           万一 /D= 因为内层 NSIS 的取参方式失效，仍能落到用户选的目录。
+      两条通道指向同一个值；内层 NSIS 卸载时会把 InstallLocation 一并删掉。
+    -->
+    <Binary Id="WrappedExe" SourceFile="$(var.WrappedExe)" />
+
+    <CustomAction
+      Id="RunInstaller"
+      BinaryKey="WrappedExe"
+      Execute="deferred"
+      Impersonate="yes"
+      HideTarget="no"
+      Return="check"
+      ExeCommand="/S --force-run &quot;/D=[DSHPET_INSTALL_DIR]&quot;"
+    />
+
+    <!--
+      规范化后的安装目录：去掉尾部反斜杠。
+      为什么需要它：CostFinalize 会把 APPLICATIONFOLDER 解析成带尾斜杠的形式
+      （`D:\Apps\DSH Pet\`），直接拼进 `"/D=[APPLICATIONFOLDER]"` 会让末尾的 `\"`
+      被当成转义引号，NSIS 收到的是 `"/D=D:\Apps\DSH Pet\` —— 少一个引号、命令解析失败
+      （实测 MSI 报 1721）。这个属性由 NormalizeInstallDir 写入，供 RunInstaller 使用。
+    -->
+    <Property Id="DSHPET_INSTALL_DIR" Secure="yes" />
+
+    <CustomAction Id="NormalizeInstallDir" Script="jscript" Execute="immediate" Return="ignore">
+      <![CDATA[
+var dir = String(Session.Property("APPLICATIONFOLDER"));
+var normalized = dir.replace(/[\\\/]+$/, "");
+Session.Property("DSHPET_INSTALL_DIR") = normalized;
+      ]]>
+    </CustomAction>
+
+    <!-- 退路通道：见上方注释。APP_GUID 与 electron-builder 的 UUID.v5("com.dsh.pet") 一致。 -->
+    <CustomAction
+      Id="SetInstallLocation"
+      Script="jscript"
+      Execute="immediate"
+      Return="ignore"
+      HideTarget="no"
+    >
+      <![CDATA[
+var dir = String(Session.Property("APPLICATIONFOLDER")).replace(/[\\\/]+$/, "");
+if (dir !== "") {
+  try {
+    var Shell = new ActiveXObject("WScript.Shell");
+    Shell.RegWrite("HKCU\\Software\\D2D25ABD-F4E1-52F5-89B2-AA3F268CE518\\InstallLocation", dir + "\\", "REG_SZ");
+  } catch (ignored) {
+    // 写不进去也不影响主通道（/D=）；NSIS 装到默认目录而不是报错中断。
+  }
+}
+      ]]>
+    </CustomAction>
+
+    <!--
+      命令行 `INSTALLDIR="D:\Apps\DSH Pet"` 的同义转换。
+      目录页把选择写进 APPLICATIONFOLDER（WIXUI_INSTALLDIR），命令行传的却是 INSTALLDIR；
+      在 CostFinalize 之前把后者灌进前者，两条入口就指向同一个目录。
+      静默安装没有目录页，这条是唯一的来源。
+    -->
+    <CustomAction Id="ApplyCommandLineInstallDir" Script="jscript" Execute="immediate" Return="ignore">
+      <![CDATA[
+var raw = String(Session.Property("INSTALLDIR"));
+// msiexec 会把 INSTALLDIR="..." 的引号一并塞进属性值（不同 shell 传参时尤其如此）；
+// 引号留着会让 CostFinalize 把它当成网络位置（错误 1606）。
+var trimmed = raw.replace(/^\s+/, "").replace(/\s+$/, "");
+if (trimmed.length > 1 && trimmed.charAt(0) === '"' && trimmed.charAt(trimmed.length - 1) === '"') {
+  trimmed = trimmed.substring(1, trimmed.length - 1);
+}
+if (trimmed !== "") {
+  Session.Property("APPLICATIONFOLDER") = trimmed;
+}
+      ]]>
+    </CustomAction>
+
+    <!--
+      目录页的预检：见下方 DSHPetValidateInstallDir。
+      Script 里的注释用 // 而不是 XML/CDATA 的破折号，避免 CDATA 结尾标记冲突。
+    -->
+    <CustomAction Id="DSHPetValidateInstallDir" Script="jscript" Execute="immediate" Return="ignore">
+      <![CDATA[
+// 目录页点「下一步」时执行（CostFinalize 之后，APPLICATIONFOLDER 已是解析好的绝对路径）。
+// 失败时写 DSHPET_DIR_ERROR，由 Publish 条件拦住前往 VerifyReadyDlg 的那一步，用户留在当前页。
+var FSO = new ActiveXObject("Scripting.FileSystemObject");
+var Shell = new ActiveXObject("WScript.Shell");
+var dir = String(Session.Property("APPLICATIONFOLDER"));
+var error = "";
+var normalized = dir.replace(/[\\\/]+$/, "");
+
+function reject(message) { if (error === "") { error = message; } }
+
+// 0) 空白：目录页允许清空输入，交给 WixUI 自己的 WIXUI_INSTALLDIR_VALID 提示
+if (dir.replace(/\s/g, "") === "") {
+  Session.Property("DSHPET_DIR_ERROR") = "";
+} else {
+  // 1) 必须是绝对路径且不是盘根（一堆文件散在盘根既难清理也难卸载）
+  if (!/^[A-Za-z]:\\/.test(dir)) {
+    reject("请输入完整的安装路径，例如 D:\\Apps\\DSH Pet。");
+  } else if (/^[A-Za-z]:\\?$/.test(normalized)) {
+    reject("不能直接装到磁盘根目录，请在盘符下新建一个子目录，例如 D:\\Apps\\DSH Pet。");
+  }
+
+  // 2) 会被 NSIS 或 WiX 误解析、或 Windows 路径不允许的字符
+  var illegal = /[$"%<>|?*\x00-\x1f]/;
+  var bad = dir.match(illegal);
+  if (bad !== null) {
+    reject("安装路径不能包含 " + bad[0] + " 等特殊字符，请改用字母、数字、空格或中文。");
+  }
+
+  // 3) 长度：Windows 的 MAX_PATH 是 260，还要留出安装目录内层级与卸载日志的余量
+  if (dir.length > 180) {
+    reject("安装路径太长（当前 " + dir.length + " 个字符，上限 180），请改用更短的目录，例如 D:\\Apps\\DSH Pet。");
+  }
+
+  // 4) 不能指向另一份正在使用的 DSH Pet 安装
+  if (error === "") {
+    var registered = "";
+    try {
+      registered = String(Shell.RegRead("HKCU\\Software\\D2D25ABD-F4E1-52F5-89B2-AA3F268CE518\\InstallLocation"));
+    } catch (ignored) { registered = ""; }
+    if (registered !== "") {
+      var registeredKey = registered.replace(/[\\\/]+$/, "").toLowerCase();
+      if (registeredKey !== normalized.toLowerCase() && FSO.FileExists(normalized + "\\" + "DSH Pet.exe")) {
+        reject("该目录已有一份 DSH Pet（当前安装在 " + registered + "）。请换一个空目录，或先卸载现有版本。");
+      }
+    }
+  }
+
+  // 5) 可写：试建目录并写一个临时文件（不碰已有内容）。不可写就报错，不提权。
+  if (error === "") {
+    try {
+      if (!FSO.FolderExists(normalized)) { FSO.CreateFolder(normalized); }
+      var probe = FSO.CreateTextFile(normalized + "\\.dsh-pet-install-probe", true, true);
+      probe.WriteLine("probe");
+      probe.Close();
+      FSO.DeleteFile(normalized + "\\.dsh-pet-install-probe", true);
+    } catch (e) {
+      reject("无法写入该目录（" + e.message + "）。请换一个有写权限的目录，或改回默认位置。");
+    }
+  }
+
+  Session.Property("DSHPET_DIR_ERROR") = error;
+}
+      ]]>
+    </CustomAction>
+
+    <UIRef Id="WixUI_InstallDir" />
+
+    <UI>
+      <!--
+        注意：不能靠「重定义同一行 Publish」来改内置翻页条件 —— 实测 WiX 4 会把两条
+        Order 相同的行**并存**写进 ControlEvent 表，内置那条没有 DSHPET_DIR_ERROR 条件，
+        于是用户照样翻页、拦截形同虚设。所以这里不覆盖，只用 Order 把预检排在翻页之前，
+        并在翻页之后补一条提示：用户会看到说明，然后回到同一个目录页。
+      -->
+
+      <!-- 目录页每次点「下一步」都做一次预检（Order 3，紧跟内置的 WixUIValidatePath）。 -->
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="DoAction"
+        Value="DSHPetValidateInstallDir"
+        Order="3"
+      >NOT WIXUI_DONTVALIDATEPATH</Publish>
+
+      <!-- 预检不通过：弹说明（Order 5 晚于内置的 NewDialog VerifyReadyDlg）。 -->
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="SpawnDialog"
+        Value="DSHPetInvalidDirDlg"
+        Order="5"
+      >DSHPET_DIR_ERROR</Publish>
+
+      <!--
+        预检通过：把 APPLICATIONFOLDER 同步到 INSTALLDIR（命令行与文档都用这个名字），
+        顺序必须晚于内置的 SetTargetPath(Order 1)，否则会被目录页的选择盖掉。
+      -->
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="[INSTALLDIR]"
+        Value="[APPLICATIONFOLDER]"
+        Order="6"
+      >NOT DSHPET_DIR_ERROR</Publish>
+
+      <Dialog
+        Id="DSHPetInvalidDirDlg"
+        Width="260"
+        Height="120"
+        Title="[ProductName] 安装程序"
+        NoMinimize="yes"
+      >
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="230" Height="60">
+          <Text>[DSHPET_DIR_ERROR]</Text>
+        </Control>
+        <Control Id="OK" Type="PushButton" X="205" Y="90" Width="56" Height="17" Default="yes" Cancel="yes" Text="确定">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+    </UI>
+
+    <InstallUISequence>
+      <!-- 命令行 INSTALLDIR 先落到 APPLICATIONFOLDER，再让 CostFinalize 与目录页沿用。 -->
+      <Custom Action="ApplyCommandLineInstallDir" Before="CostFinalize">INSTALLDIR</Custom>
+    </InstallUISequence>
+
+    <InstallExecuteSequence>
+      <!-- 静默安装（msiexec /qn、企业部署）没有 UI，仍在 CostFinalize 前做同一次转换。 -->
+      <Custom Action="ApplyCommandLineInstallDir" Before="CostFinalize">INSTALLDIR</Custom>
+      <!-- ProcessComponents 之后才执行，此时目录已建好；静默安装也同样执行。 -->
+      <Custom Action="NormalizeInstallDir" After="CostFinalize">NOT Installed</Custom>
+      <Custom Action="SetInstallLocation" After="NormalizeInstallDir">NOT Installed</Custom>
+      <Custom Action="RunInstaller" After="InstallFiles">NOT Installed</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>

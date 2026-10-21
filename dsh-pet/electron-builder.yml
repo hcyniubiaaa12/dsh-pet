@@ -1,4 +1,4 @@
-# electron-builder 配置 —— Windows 安装包（NSIS + MSI 封装，ticket 02/10）
+# electron-builder 配置 —— Windows 安装包（NSIS 内层包；MSI 外壳由 scripts/build-msi.mjs 单独产出）
 #
 # 为什么单独放一个文件、不写进 package.json：
 #   1. scripts/prepare.js 每次构建都会**重写** package.json 的 files 白名单，
@@ -48,14 +48,11 @@ files:
 
 win:
   target:
-    # NSIS 安装包（已验证的完整行为：每用户安装、安装即写自启、卸载清理 Run 项）
+    # 只产出一个安装包：NSIS（每用户安装、安装即写自启、卸载清理 Run 项）。
+    # MSI 外壳不再用 electron-builder 的 msiwrapped —— 它的模板不可覆盖、没有
+    # `<UI>` 也没有安装目录变量，用户无法选目录。MSI 现由 scripts/build-msi.mjs
+    # 把**本目标产出的 exe** 包进自维护的 WiX 项目（build/wix/），在 dist 流程末尾执行。
     - target: nsis
-      arch:
-        - x64
-    # 同一个 NSIS 安装包再封装成 MSI（Windows Installer 入口）：
-    # msi-wrapped 会先构建 nsis，再把它包进 WiX MSI —— 保留 customInstall/customUnInstall，
-    # 不引入原生 MSI 缺失卸载钩子的问题。target 顺序不能反（MsiWrappedTarget 要求 nsis 先产出）。
-    - target: msiwrapped
       arch:
         - x64
   # 256×256 PNG，electron-builder 负责生成多尺寸 .ico（应用、开始菜单、安装程序共用）
@@ -78,20 +75,7 @@ nsis:
   # 卸载时保留用户数据（~/.dsh/dsh-pet 与 %APPDATA% 下的 Chromium profile）
   deleteAppDataOnUninstall: false
 
-# MSI 入口（Windows Installer）：内部仍是同一个 NSIS 安装包，行为与 exe 完全一致。
-# oneClick/perMachine 只影响外层 MSI 的呈现；实际安装细节由 nsis 段决定。
-#
-# 限制与陷阱见仓库根 docs/installer.md「MSI（msiwrapped）」——模板不可覆盖、不含目录页，
-# 因此这里的安装目录只能是默认值；让用户在 MSI 里选目录需要自建 WiX 工程
-# （见 .scratch/installer-customization/）。
-msiWrapped:
-  artifactName: dsh-pet-Setup-${version}.${ext}
-  oneClick: false
-  perMachine: false
-  # 内部 NSIS 静默执行：外层 MSI 负责进度/取消，避免用户看到「MSI 界面 → NSIS 向导」两层安装界面。
-  # --force-run 让静默安装结束时重新启动应用（否则 MSI 装完桌面上什么都没发生）。
-  # 安装目录用默认值；需要选目录的高级用户请用同目录构建出的 .exe。
-  wrappedInstallerArgs: '/S --force-run'
-  createDesktopShortcut: true
-  createStartMenuShortcut: true
-  shortcutName: DSH Pet
+# MSI 入口（Windows Installer）：不再由 electron-builder 产出。见 build/wix/ 与
+# scripts/build-msi.mjs —— 外层 WiX 项目自带 WixUI_InstallDir 目录页，把用户选的
+# INSTALLDIR 静默传给下面这个 NSIS 包（/S --force-run），因此 .exe 与 .msi 装出来的
+# 东西完全一致。约定与陷阱见仓库根 docs/installer.md「MSI（自维护 WiX 项目）」。
