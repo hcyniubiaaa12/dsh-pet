@@ -265,27 +265,36 @@
     ${EndIf}
 
     ${GetParameters} $R0
+    ; 两个开关（/PURGE 与 --delete-app-data）语义相同，任一命中即四项全删；
+    ; 解析**无条件覆盖**页面勾选 —— 所以 /PURGE 只该用在静默（/S）场景，交互式
+    ; 卸载带 /PURGE 启动时，页面上的勾选会被这里整体改成「全删」。
+    ClearErrors
     ${GetOptions} $R0 "/PURGE" $R1
+    ${If} ${Errors}
+      ${GetOptions} $R0 "--delete-app-data" $R1
+    ${EndIf}
     ${IfNot} ${Errors}
       StrCpy $dshPetPurgeData ${BST_CHECKED}
       StrCpy $dshPetPurgeAi ${BST_CHECKED}
       StrCpy $dshPetPurgeRuntime ${BST_CHECKED}
       StrCpy $dshPetPurgeCache ${BST_CHECKED}
-    ${Else}
-      ${GetOptions} $R0 "--delete-app-data" $R1
-      ${IfNot} ${Errors}
-        StrCpy $dshPetPurgeData ${BST_CHECKED}
-        StrCpy $dshPetPurgeAi ${BST_CHECKED}
-        StrCpy $dshPetPurgeRuntime ${BST_CHECKED}
-        StrCpy $dshPetPurgeCache ${BST_CHECKED}
-      ${EndIf}
     ${EndIf}
 
-    ; 1) 对话记忆与配置：只删 dsh-pet 目录，不含 electron 运行时；
-    ;    standalone-ai.json 与 autostart-initialized 也在这个目录里，见下面两项。
+    ; 1) 对话记忆与配置：删 $dshPetHome\dsh-pet 目录，但**不含** standalone-ai.json
+    ;    （第 2 项管它）与 autostart-initialized（无条件的自启标记，见末尾）——
+    ;    这两个文件各自有独立的勾选项/删除逻辑，绝不能被本项连带删掉。
+    ;
+    ;    NSIS 没有「目录排除删除」原语，RMDir /r 会递归删掉目录里的一切，所以
+    ;    先把两个文件 Rename 到**目录外**（父目录 $dshPetHome 下的保护名——
+    ;    Rename 只改名字，内容与时间戳原样），RMDir /r 之后原样放回。
+    ;    每一步失败都只是保留现状，不中断卸载。
     ${If} $dshPetPurgeData == ${BST_CHECKED}
       ClearErrors
+      Rename "$dshPetHome\dsh-pet\standalone-ai.json" "$dshPetHome\standalone-ai.json.__dsh_keep__"
+      Rename "$dshPetHome\dsh-pet\autostart-initialized" "$dshPetHome\autostart-initialized.__dsh_keep__"
       RMDir /r "$dshPetHome\dsh-pet"
+      Rename "$dshPetHome\standalone-ai.json.__dsh_keep__" "$dshPetHome\dsh-pet\standalone-ai.json"
+      Rename "$dshPetHome\autostart-initialized.__dsh_keep__" "$dshPetHome\dsh-pet\autostart-initialized"
     ${EndIf}
 
     ; 2) AI 设置与 API 密钥：明文密钥单列一项，让用户在删之前意识到它是什么。

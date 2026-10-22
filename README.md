@@ -283,6 +283,8 @@ npm run build && npm run standalone   # 仓库里（先构建）
   ```sh
   "C:\Users\<你>\AppData\Local\Programs\DSH Pet\Uninstall DSH Pet.exe" /S /PURGE
   ```
+
+  注意 `/PURGE`（与 `--delete-app-data`）**只在静默（`/S`）场景使用**：卸载器解析到这两个开关时会无条件把四项勾选覆盖成「全删」——交互式卸载带 `/PURGE` 启动的话，向导页上的勾选状态会被覆盖，四项全部执行。交互式卸载请以页面勾选为准，不要带这两个开关。
 - 多应用共享的 `%LOCALAPPDATA%\electron\Cache` 永不删除。
 - 因为 `autostart-initialized` 被卸载删除，**重装后恢复「默认开启自启」**——之前在托盘里主动关掉过自启的选择不会保留（升级安装不受影响，见下节）。
 

@@ -111,7 +111,8 @@ Session.Property("DSHPET_INSTALL_DIR") = normalized;
       ]]>
     </CustomAction>
 
-    <!-- 退路通道：见上方注释。APP_GUID 与 electron-builder 的 UUID.v5("com.dsh.pet") 一致。 -->
+    <!-- 退路通道：见上方注释。AppGuid 由 candle -d 注入（见 scripts/build-msi.mjs），
+         与 electron-builder 的 UUID.v5("com.dsh.pet") 一致。 -->
     <CustomAction
       Id="SetInstallLocation"
       Script="jscript"
@@ -124,7 +125,7 @@ var dir = String(Session.Property("APPLICATIONFOLDER")).replace(/[\\\/]+$/, "");
 if (dir !== "") {
   try {
     var Shell = new ActiveXObject("WScript.Shell");
-    Shell.RegWrite("HKCU\\Software\\D2D25ABD-F4E1-52F5-89B2-AA3F268CE518\\InstallLocation", dir + "\\", "REG_SZ");
+    Shell.RegWrite("HKCU\\Software\\$(var.AppGuid)\\InstallLocation", dir + "\\", "REG_SZ");
   } catch (ignored) {
     // 写不进去也不影响主通道（/D=）；NSIS 装到默认目录而不是报错中断。
   }
@@ -196,7 +197,7 @@ if (dir.replace(/\s/g, "") === "") {
   if (error === "") {
     var registered = "";
     try {
-      registered = String(Shell.RegRead("HKCU\\Software\\D2D25ABD-F4E1-52F5-89B2-AA3F268CE518\\InstallLocation"));
+      registered = String(Shell.RegRead("HKCU\\Software\\$(var.AppGuid)\\InstallLocation"));
     } catch (ignored) { registered = ""; }
     if (registered !== "") {
       var registeredKey = registered.replace(/[\\\/]+$/, "").toLowerCase();

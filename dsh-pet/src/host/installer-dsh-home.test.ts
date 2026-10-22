@@ -7,27 +7,18 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { macroBody, readPackageFile } from './installer-test-utils.ts';
 
-const nsh = readFileSync(new URL('../../build/installer.nsh', import.meta.url), 'utf8');
-
-/** 取某个 !macro 的宏体（到下一个 !macroend 为止） */
-function macroBody(name: string): string {
-  const start = nsh.indexOf(`!macro ${name}`);
-  assert.ok(start >= 0, `缺少 !macro ${name}`);
-  const end = nsh.indexOf('!macroend', start);
-  assert.ok(end > start, `!macro ${name} 没有结尾`);
-  return nsh.slice(start, end);
-}
+const nsh = readPackageFile('build/installer.nsh');
 
 describe('数据目录 —— 安装侧与卸载侧同走 dshPetDataDir', () => {
   test('customInstall 也走 dshPetDataDir 宏', () => {
-    const install = macroBody('customInstall');
+    const install = macroBody(nsh, 'customInstall');
     assert.match(install, /!insertmacro\s+dshPetDataDir/, '安装段必须复用数据目录宏');
   });
 
   test('DSH_HOME 的读取发生在回落默认路径之前（宏体内顺序）', () => {
-    const macro = macroBody('dshPetDataDir');
+    const macro = macroBody(nsh, 'dshPetDataDir');
     const readAt = macro.search(/ReadEnvStr\s+\S+\s+"DSH_HOME"/);
     const fallbackAt = macro.indexOf('$PROFILE\\.dsh');
     assert.ok(readAt >= 0, '宏体必须先读 DSH_HOME');
@@ -36,7 +27,7 @@ describe('数据目录 —— 安装侧与卸载侧同走 dshPetDataDir', () => 
   });
 
   test('除 dshPetDataDir 宏体外，脚本代码里不再有写死的 $PROFILE\\.dsh', () => {
-    const macro = macroBody('dshPetDataDir');
+    const macro = macroBody(nsh, 'dshPetDataDir');
     // 注释里的提法不算「写死的路径」——钉的是代码行，不钉文档措辞
     const code = nsh
       .split('\n')

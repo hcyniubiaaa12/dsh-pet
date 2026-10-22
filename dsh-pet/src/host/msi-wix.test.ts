@@ -1,8 +1,8 @@
 /**
  * MSI 安装目录页的构建契约（ticket 01）。
  *
- * 为什么需要这层测试：`.wxs` / `.mjs` 构建脚本都不进 prettier 与 eslint，
- * 而 `electron-builder.yml` 里删错一行只会让**构建产物**出问题（MSI 没有目录页、
+ * 为什么需要这层测试：`.nsh` / `.wxs` 都不进 prettier（`.mjs` 构建脚本进 eslint，
+ * 但构建行为没法用 lint 拦），而 `electron-builder.yml` 里删错一行只会让**构建产物**出问题（MSI 没有目录页、
  * 或干脆退回 msiwrapped），`pnpm test` 是唯一能在构建前拦住的地方。
  *
  * 断言粒度停在「行为存在」：不逐字比对 WiX 源码，只钉住用户可见能力与
@@ -184,7 +184,15 @@ describe('命令行 INSTALLDIR —— 静默部署也能指定目录', () => {
       '传给 /D= 的值必须先去掉尾斜杠',
     );
     assert.match(wxs, /Id="SetInstallLocation"/, '退路：写 NSIS 会优先读取的 InstallLocation');
-    assert.match(wxs, /D2D25ABD-F4E1-52F5-89B2-AA3F268CE518/, '注册表键必须是 electron-builder 的 APP_GUID');
+    // APP_GUID 由 candle -dAppGuid 注入（build-msi.mjs 单点定义），wxs 里不许再写死
+    assert.match(wxs, /\$\(var\.AppGuid\)/, '注册表键必须经 $(var.AppGuid) 引用');
+    assert.ok(
+      !/D2D25ABD-F4E1-52F5-89B2-AA3F268CE518/.test(wxs),
+      'APP_GUID 不许写死在 wxs 里，只能由 build-msi.mjs 注入',
+    );
+    const script = readPackageFile('scripts/build-msi.mjs');
+    assert.match(script, /D2D25ABD-F4E1-52F5-89B2-AA3F268CE518/, 'APP_GUID 单点定义在 build-msi.mjs');
+    assert.match(script, /-dAppGuid=/, '编译时必须把 APP_GUID 传给 candle');
     assert.match(wxs, /InstallLocation/, 'NSIS 的 multiUser.nsh 读的就是这个值名');
   });
 });

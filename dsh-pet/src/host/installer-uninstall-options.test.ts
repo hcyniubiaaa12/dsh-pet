@@ -9,32 +9,9 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-
-/** 读包根下的文件（本测试位于 src/host/，包根是两级之上） */
-function readPackageFile(relative: string): string {
-  return readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
-}
+import { functionBody, macroBody, readPackageFile } from './installer-test-utils.ts';
 
 const nsh = readPackageFile('build/installer.nsh');
-
-/** 取某个 !macro 的宏体（到下一个 !macroend 为止） */
-function macroBody(name: string): string {
-  const start = nsh.indexOf(`!macro ${name}`);
-  assert.ok(start >= 0, `缺少 !macro ${name}`);
-  const end = nsh.indexOf('!macroend', start);
-  assert.ok(end > start, `!macro ${name} 没有结尾`);
-  return nsh.slice(start, end);
-}
-
-/** 取某个 Function 的函数体 */
-function functionBody(name: string): string {
-  const start = nsh.indexOf(`Function ${name}`);
-  assert.ok(start >= 0, `缺少 Function ${name}`);
-  const end = nsh.indexOf('FunctionEnd', start);
-  assert.ok(end > start, `Function ${name} 没有结尾`);
-  return nsh.slice(start, end);
-}
 
 describe('卸载勾选页 —— 插在欢迎页与进度页之间', () => {
   test('自定义页在卸载器里声明，且先于进度页出现', () => {
@@ -56,7 +33,7 @@ describe('卸载勾选页 —— 插在欢迎页与进度页之间', () => {
   });
 
   test('每一项都写清路径与后果（用户要知道删的是哪个目录）', () => {
-    const create = functionBody('un.dshPetPurgePageCreate');
+    const create = functionBody(nsh, 'un.dshPetPurgePageCreate');
     for (const [label, pattern] of [
       ['对话记忆与配置', /\\dsh-pet\\/],
       ['AI 密钥', /standalone-ai\.json/],
@@ -65,15 +42,16 @@ describe('卸载勾选页 —— 插在欢迎页与进度页之间', () => {
     ] as const) {
       assert.match(create, pattern, `${label} 的说明文字里必须出现实际路径`);
     }
-    assert.match(create, /348\s?MB/, '运行时体积要写在选项上，否则「约 400MB」说服不了用户');
-    assert.match(create, /65\s?MB/, '桌面壳缓存体积同上');
+    // 文案会变（体积数字随 Electron 版本漂移），只钉「每项都标了体积」这件事
+    assert.match(create, /\d+\s?MB/, '运行时体积要写在选项上，否则「约 400MB」说服不了用户');
+    assert.ok((create.match(/\d+\s?MB/g) ?? []).length >= 2, '运行时与桌面壳缓存两项都要标体积');
   });
 
   test('页面在进度页之前，取消时卸载段从未执行', () => {
-    const leave = functionBody('un.dshPetPurgePageLeave');
+    const leave = functionBody(nsh, 'un.dshPetPurgePageLeave');
     assert.match(leave, /\$\{NSD_GetState\}/, 'leave 回调必须读取用户的勾选结果');
     // 静默模式没有页面可点：create 里必须 Abort 跳过，勾选值由命令行决定
-    const create = functionBody('un.dshPetPurgePageCreate');
+    const create = functionBody(nsh, 'un.dshPetPurgePageCreate');
     assert.match(create, /\$\{Silent\}/, '静默卸载必须单独处理，不能假设有 UI');
     assert.match(create, /\bAbort\b/, '静默模式跳过页面');
   });
@@ -81,7 +59,7 @@ describe('卸载勾选页 —— 插在欢迎页与进度页之间', () => {
 
 describe('卸载清理 —— 只删勾选的精确路径', () => {
   test('四个删除目标各自被引用，且都是精确路径（不删共享缓存）', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     assert.match(uninstall, /\$dshPetHome\\dsh-pet\b/, '对话记忆与配置');
     assert.match(uninstall, /standalone-ai\.json/, 'AI 设置与 API 密钥单独一项');
     assert.match(uninstall, /\$dshPetHome\\electron\b/, '内置 Electron 运行时');
@@ -92,7 +70,7 @@ describe('卸载清理 —— 只删勾选的精确路径', () => {
   });
 
   test('不勾选时一个字节都不碰：每个删除都挂在对应的勾选变量下', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     for (const flag of ['dshPetPurgeData', 'dshPetPurgeAi', 'dshPetPurgeRuntime', 'dshPetPurgeCache']) {
       assert.match(
         uninstall,
@@ -108,21 +86,21 @@ describe('卸载清理 —— 只删勾选的精确路径', () => {
   });
 
   test('单项失败不阻断其余项，也不阻断卸载', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     // RMDir /r 对不存在/被占用的路径不致命，关键是不得用 Abort/Quit 中断卸载段
     assert.ok(!/\bAbort\b|\bQuit\b/.test(uninstall), '卸载清理不得中断整个卸载');
     assert.match(uninstall, /ClearErrors/, '删除前清错误标志，避免上一项失败影响下一项');
   });
 
   test('静默 /PURGE 全删；--delete-app-data 视为同一开关', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     assert.match(uninstall, /\$\{GetOptions\}\s+\$R0\s+"\/PURGE"/, '/PURGE 必须被解析（GetOptions 不区分大小写）');
     assert.match(uninstall, /--delete-app-data/, '沿用 electron-builder 已注册的开关，不留两套语义');
     assert.match(uninstall, /StrCpy\s+\$dshPetPurge\w+\s+\$\{BST_CHECKED\}/, '/PURGE 时四项置为全删');
   });
 
   test('升级安装绝不清理任何数据，且保护必须在清理之前', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     const guardAt = uninstall.search(/\$\{IfNot\}\s+\$\{isUpdated\}/);
     const purgeAt = uninstall.indexOf('/PURGE');
     const deleteAt = uninstall.indexOf('RMDir');
@@ -132,7 +110,7 @@ describe('卸载清理 —— 只删勾选的精确路径', () => {
   });
 
   test('自启标记独立于勾选：非升级卸载总是删掉，重装才能恢复默认开启', () => {
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     const markerAt = uninstall.indexOf('autostart-initialized');
     assert.ok(markerAt > 0, '卸载必须删除自启初始化标记');
     const preceding = uninstall.slice(0, markerAt);
@@ -140,15 +118,38 @@ describe('卸载清理 —— 只删勾选的精确路径', () => {
     const lastEndIf = preceding.lastIndexOf('${EndIf}');
     assert.ok(lastIf < lastEndIf, '标记的删除不能挂在任何勾选判断里');
   });
+
+  test('只勾「对话记忆与配置」时，standalone-ai.json 与 autostart-initialized 不被 RMDir /r 连带删掉', () => {
+    const uninstall = macroBody(nsh, 'customUnInstall');
+    // 删除目录前必须先把两个文件 Rename 到目录外（$dshPetHome 下）保护起来，
+    // RMDir /r 之后再放回 —— NSIS 没有「目录排除删除」原语，不做保护就是整目录递归删
+    const item1At = uninstall.indexOf('$dshPetPurgeData == ${BST_CHECKED}');
+    const item1 = uninstall.slice(item1At, uninstall.indexOf('RMDir /r "$dshPetHome\\electron"', item1At));
+    assert.ok(item1At > 0, '第 1 项的勾选判断必须存在');
+    for (const name of ['standalone-ai.json', 'autostart-initialized']) {
+      const protectAt = item1.indexOf(`Rename "$dshPetHome\\dsh-pet\\${name}"`);
+      const dirAt = item1.indexOf('RMDir /r "$dshPetHome\\dsh-pet"');
+      assert.ok(protectAt > 0, `${name} 必须在第 1 项里有显式的 Rename 保护`);
+      assert.ok(protectAt < dirAt, `${name} 的保护必须发生在 RMDir /r 之前`);
+      // 保护路径在目录外（$dshPetHome\ 下），同目录改名会被递归删连坐
+      const renameLine = item1.slice(protectAt, item1.indexOf('\n', protectAt));
+      assert.match(renameLine, /"\$dshPetHome\\[\w.-]+\.__dsh_keep__"/, `${name} 必须改名到 dsh-pet 目录之外`);
+      assert.match(
+        item1,
+        new RegExp(`Rename "\\$dshPetHome\\\\${name}\\.__dsh_keep__"`),
+        `删完目录后 ${name} 要被放回`,
+      );
+    }
+  });
 });
 
 describe('数据目录 —— 与 DSH_HOME 同口径', () => {
   test('读取 DSH_HOME，未设置时回落 $PROFILE\\.dsh（唯一算法，供 ticket 03 复用）', () => {
-    const macro = macroBody('dshPetDataDir');
+    const macro = macroBody(nsh, 'dshPetDataDir');
     assert.match(macro, /ReadEnvStr\s+(\$\w+|\$\{OUT\})\s+"DSH_HOME"/);
     assert.match(macro, /\$PROFILE\\\.dsh/);
     // 卸载段必须走这个宏，而不是再写一遍字面量
-    const uninstall = macroBody('customUnInstall');
+    const uninstall = macroBody(nsh, 'customUnInstall');
     assert.match(uninstall, /!insertmacro\s+dshPetDataDir\s+\$dshPetHome/);
   });
 });

@@ -33,6 +33,12 @@ const WIX_ARCHIVE = 'wix-4.0.0.5512.2.7z';
 const WIX_SHA512 = 'fe677fcd837b18c9b912985d91636bbd8a1e800c3b3a6a841b6f96e89624e839';
 
 /**
+ * 内层 NSIS 识别的 APP_GUID：electron-builder 的 UUID.v5("com.dsh.pet")，
+ * wxs 经 $(var.AppGuid) 引用（multiUser.nsh 读 HKCU\Software\<AppGuid>\InstallLocation）。
+ */
+const APP_GUID = 'D2D25ABD-F4E1-52F5-89B2-AA3F268CE518';
+
+/**
  * light.exe 的固定参数 —— 只在这里出现一次。
  *  - `-ext WixUIExtension`：WixUI_InstallDir 与各对话框的符号来自这个扩展。
  *  - `-sice:ICE64`：APPLICATIONFOLDER 位于用户 profile 下而 MSI 自身不装文件时，
@@ -138,6 +144,7 @@ run(candle, [
   'x64',
   `-dWrappedExe=${wrappedExe}`,
   `-dProductVersion=${version}`,
+  `-dAppGuid=${APP_GUID}`,
   '-out',
   objectFile,
   WIX_SOURCE,
