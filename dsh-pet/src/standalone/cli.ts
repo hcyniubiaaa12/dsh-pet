@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * dsh-pet 独立模式入口 —— 不打开 DSH 也能养桌宠。
+ * dsh-pet 独立模式 CLI 入口 —— 不打开 DSH 也能养桌宠。
  *
- * 它把三件事串起来（每一步都复用插件自己的实现，没有第二份业务逻辑）：
- *   1. `./context` 造一个伪 Cordis ctx，把插件的宿主半边（`src/host/index.ts` 的 `apply`）跑起来；
- *   2. `./server` 起一个真正的 `node:http` 服务，把 `apply` 注册的 prefix handler 接上去
- *      （路由表仍然只有插件那一份）；
- *   3. 插件自己的 `launchHelper` 因此照常探测 Electron、按配置拉起透明置顶小窗，
- *      并与宿主经 bridge 管道通信 —— 与 DSH 内运行完全同一条路径。
+ * 真正的启动逻辑在 `./app.ts` 的 `startStandalone()`（可编程、不碰 argv、不 exit）：
+ * 它造伪 Cordis ctx、起本机 `node:http` 服务、跑插件的宿主半边 `apply()`，并返回
+ * `port` / `settingsUrl` / `shutdown()`。本文件只负责：
+ *   1. 解析命令行（`--port` / `--check` / `--help`）与角色参数；
+ *   2. 调用 `startStandalone()`；
+ *   3. 把 SIGINT / SIGTERM / POST /shutdown 映射成「收尾 → process.exit」。
  *
  * 用法：
  *   npx dsh-pet-standalone              # 插件装好后直接跑（package.json 的 bin）
@@ -19,151 +19,39 @@
  * 余额、碎碎念、对话、系统通知依赖 DSH 的凭证/模型/会话，在独立模式下明确不可用
  * （结构化失败 + 日志，不假装成功）。详见 README 的「独立运行（不打开 DSH）」一节。
  */
-import { existsSync } from 'node:fs';
+import { HOST_KIND_ENV } from '../host/host-kind';
+import { APP_ROLE_ARGS, parseAppRole } from '../host/launch-plan';
+import { MissingPackageConfigError, startStandalone, type StandaloneHandle } from './app';
+import { runCheck } from './check';
+import { createStandaloneLogger } from './context';
+import { parseArgs, USAGE } from './options';
 
-import { flattenPetList, readAllConfig } from '../host/config';
-import { dshHomeDir, packageRoot } from '../host/helper-process';
-import { apply } from '../host/index';
-import { runCheck, packageVersion } from './check';
-import { createStandaloneAi } from './ai-provider';
-import { createRequestSecurity } from './request-security';
-import { writeStandaloneRuntime } from './runtime-state';
-import {
-  createStandaloneContext,
-  createStandaloneLogger,
-  type RegisteredRoute,
-  type StandaloneLogger,
-} from './context';
-import { configPathsFor, describePets, isDesktopVisible, parseArgs, USAGE } from './options';
-import { listenStandaloneServer } from './server';
-
-/** 启动独立模式：先起服务拿到端口，再 `apply`（插件据此拼桌面 Helper 的 configUrl） */
-async function run(logger: StandaloneLogger, options: { port: number }): Promise<void> {
-  const home = dshHomeDir();
-  const paths = configPathsFor(packageRoot, home);
-
-  // 预检：包内默认配置读不到时宿主半边必然每请求失败；早给可操作的诊断，别让用户对着空桌面猜
-  if (!existsSync(paths.defaultFile)) {
-    logger.error(
-      `包内默认配置缺失：${paths.defaultFile}。若你是在直接跑源码（包根被解析成了 src/），` +
-        '请改用构建产物：npm run bundle 后 node lib/standalone.js（或 npm run standalone）。',
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  const routes: RegisteredRoute[] = [];
-  const portRef = { value: options.port };
-  const ai = createStandaloneAi(home, logger);
-  const security = createRequestSecurity();
-  const context = createStandaloneContext({
-    port: () => portRef.value,
-    logger,
-    routes,
-    ai,
-    authenticatedUrl: security.authenticatedUrl,
-  });
-  // /shutdown 的回调要在服务构造时给出去，而停机函数要在服务之后定义：
-  // 用一个可替换的转发器解耦（服务构造时只拿到"将来会是谁"）。
-  let forwardShutdown: () => void = () => {};
-  const server = await listenStandaloneServer({
-    routes,
-    logger,
-    port: options.port,
-    security,
-    ai,
-    status: () => ({
-      name: 'dsh-pet-standalone',
-      pid: process.pid,
-      pluginRoot: packageRoot,
-      plugin: { root: packageRoot, version: packageVersion(packageRoot) },
-      port: portRef.value,
-      uptimeSec: Math.round(process.uptime()),
-    }),
-    onShutdown: () => forwardShutdown(),
-  });
-  portRef.value = server.port;
-  let releaseRuntime: () => void;
-  try {
-    releaseRuntime = writeStandaloneRuntime(home, {
-      port: server.port,
-      token: security.token,
-      settingsUrl: security.authenticatedUrl(`http://127.0.0.1:${server.port}`),
-      pluginRoot: packageRoot,
+/** 收尾后退出：失败时打一条可读日志并以 1 退出（与旧 CLI 的收尾口径一致） */
+function exitAfterShutdown(logger: ReturnType<typeof createStandaloneLogger>, shutdown: () => Promise<void>): void {
+  shutdown()
+    .then(() => process.exit(0))
+    .catch((error: unknown) => {
+      logger.error(`收尾失败：${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
     });
-  } catch (error) {
-    await context.dispose();
-    await server.close();
-    throw error;
-  }
-
-  let shuttingDown = false;
-  const shutdown = async (reason: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`收尾（${reason}）…`);
-    // 先释放插件注册的 effect（停桌面 Helper、清周期定时器），再关服务
-    try {
-      await context.dispose();
-    } finally {
-      await server.close();
-      releaseRuntime();
-    }
-    logger.info('已退出。');
-  };
-  const requestShutdown = (reason: string): void => {
-    shutdown(reason)
-      .then(() => process.exit(0))
-      .catch((error: unknown) => {
-        logger.error(`收尾失败：${error instanceof Error ? error.message : String(error)}`);
-        process.exit(1);
-      });
-  };
-  forwardShutdown = () => requestShutdown('POST /shutdown');
-  process.on('SIGINT', () => requestShutdown('SIGINT'));
-  process.on('SIGTERM', () => requestShutdown('SIGTERM'));
-
-  // 起插件宿主半边：路由表、状态仓、桌面 Helper（含 bridge 管道）都在这一句里
-  apply(context.ctx);
-
-  let pets: Record<string, unknown>[] = [];
-  let configSource = paths.userFile;
-  try {
-    pets = flattenPetList(readAllConfig(paths));
-    if (!existsSync(paths.userFile)) configSource = `${paths.userFile}（不存在 → 用包内默认）`;
-  } catch (error) {
-    logger.warn(
-      `读配置失败（服务照常运行，相关端点会显式报错）：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  const desktopVisible = pets.filter(isDesktopVisible);
-  for (const line of [
-    '',
-    '===== dsh-pet 独立模式（不需要 DSH）=====',
-    `  插件        dsh-pet@${packageVersion(packageRoot)}  ${packageRoot}`,
-    `  路由        http://127.0.0.1:${server.port}/dsh-pet-7340/`,
-    `  配置        ${configSource}`,
-    `  宠物        ${describePets(pets)}`,
-    desktopVisible.length === 0
-      ? '  桌面小窗    0 只：display 需要 desktop 或 both 才会出现透明小窗（服务仍在运行）'
-      : `  桌面小窗    ${desktopVisible.length} 只`,
-    ai.isReady()
-      ? '  AI          本机 API 已启用；自动碎碎念遵循设置页开关'
-      : '  AI          未配置或未启用，不发送模型请求；右键“打开 AI 设置”后在本机填写',
-    '  不可用      余额 / 会话工作状态 / DSH 系统通知',
-    '  退出        Ctrl+C，或 POST /shutdown',
-    '',
-  ]) {
-    logger.info(line);
-  }
-  if (context.failures.length > 0) {
-    logger.warn(`初始化期间有 ${context.failures.length} 项失败（见上方日志）；路由仍可用，相关端点会显式报错`);
-  }
 }
 
 /** CLI 入口 */
 async function main(): Promise<number> {
-  const parsed = parseArgs(process.argv.slice(2));
+  // 宿主形态由启动方显式传入（ticket 08）：本入口永远是独立模式 / 站点语义，
+  // 不依赖 host-kind.ts 的 Electron 嗅探回退（纯 Node 进程恰好会回退成 site，
+  // 但显式声明才能让契约在运行期可验证）。已有取值时不覆盖（环境变量优先）。
+  if (!process.env[HOST_KIND_ENV]) process.env[HOST_KIND_ENV] = 'site';
+  const argv = process.argv.slice(2);
+  // 角色分流（ticket 01）：打包形态由同一个可执行文件承担三种角色；独立模式入口目前恒为宿主。
+  // 角色参数先摘掉，免得被自己的 CLI 解析当成未知参数；--port/--check 等是本入口自己的参数，不告警。
+  const invocation = parseAppRole(argv, { knownArgs: ['--port', '--check', '-h', '--help'] });
+  const logger = createStandaloneLogger();
+  for (const warning of invocation.warnings) logger.warn(warning);
+  if (invocation.role !== 'host') {
+    logger.warn(`独立模式 CLI 目前只运行宿主角色（收到 ${invocation.role} 参数），按宿主继续。`);
+  }
+  const parsed = parseArgs(argv.filter((arg) => !APP_ROLE_ARGS.includes(arg)));
   if ('error' in parsed) {
     console.error(`dsh-pet-standalone: ${parsed.error}\n`);
     console.error(USAGE);
@@ -174,9 +62,28 @@ async function main(): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  const logger = createStandaloneLogger();
   if (options.check) return runCheck(logger);
-  await run(logger, options);
+
+  let handle: StandaloneHandle;
+  try {
+    handle = await startStandalone({
+      logger,
+      port: options.port,
+      autostart: invocation.autostart,
+      onShutdownRequested: (_reason, shutdown) => exitAfterShutdown(logger, shutdown),
+    });
+  } catch (error) {
+    if (error instanceof MissingPackageConfigError) {
+      logger.error(error.message);
+      // 与旧 run() 一致：只设退出码、自然退出，不打断已刷出的诊断
+      process.exitCode = 1;
+      return 0;
+    }
+    throw error;
+  }
+
+  process.once('SIGINT', () => exitAfterShutdown(logger, () => handle.shutdown('SIGINT')));
+  process.once('SIGTERM', () => exitAfterShutdown(logger, () => handle.shutdown('SIGTERM')));
   return 0;
 }
 

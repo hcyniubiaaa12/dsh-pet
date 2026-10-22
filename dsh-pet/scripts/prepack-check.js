@@ -17,7 +17,8 @@
  *   5. package.json 声明了 dsh.bundle 和 dsh.client（否则装不上）
  *   6. 表情包图片确实随包发布（files 白名单含 assets/memes 且目录里有 png；
  *      配图功能只读包内 assets/memes，漏发即功能整体失效），并核对 memes 键与图片对齐
- *   7. 包总大小 < 200MB（自设软上限，防误塞母版；npm 硬上限远更大）
+ *   7. 包总大小 < 200MB（自设软上限，防误塞母版；npm 硬上限远更大；
+ *      不计 dist/ 下 `npm run dist` 产出的安装包）
  *
  * ============================================================================
  */
@@ -67,6 +68,9 @@ const stripJsonc = (s) => {
 };
 
 // ---- 1. 必需文件存在性 ----
+// 注意：runtime/electron-helper/main.js 顶层 require 的每个相对模块都必须列在这里 ——
+// files 白名单漏发其中一个，桌面壳启动即 MODULE_NOT_FOUND。
+// 这组清单由 src/host/release-manifest.test.ts 按 main.js 的 require 自动核对。
 const required = [
   'lib/index.js', // 宿主半侧
   'lib/client.js', // 浏览器半侧
@@ -79,6 +83,9 @@ const required = [
   'runtime/electron-helper/topmost-watchdog.js', // 桌面模式置顶看门狗判定（main.js require，缺了会启动即崩）
   'runtime/electron-helper/dpi-linearization.js', // 桌面模式 DPI 线性化判定与换算（main.js require，缺了会启动即崩）
   'runtime/electron-helper/tray-platform.js', // 桌面模式托盘平台差异判定（main.js require，缺了会启动即崩）
+  'runtime/electron-helper/tray-menu.js', // 桌面模式托盘菜单模板（main.js require，缺了会启动即崩）
+  'runtime/electron-helper/probe-command.js', // DPI 探测子进程启动命令构造（main.js require，缺了会启动即崩）
+  'runtime/electron-helper/control-request.js', // 单实例唤回控制请求判定（main.js require，缺了会启动即崩）
   'runtime/electron-helper/desktop-geometry.js', // 活动边界与菜单工作区分离
   'runtime/electron-helper/preload.js', // 桌面模式 preload 桥
   'runtime/electron-helper/renderer.js', // 桌面模式渲染端（宠物本体）
@@ -148,14 +155,16 @@ try {
   console.log(`[prepack-check] note: 跳过 memes 键对齐核对（config.jsonc 解析失败：${e.message}）`);
 }
 
-// ---- 7. 包总大小估算（排除 node_modules/.git/脚本/素材源目录/README预览GIF） ----
+// ---- 7. 包总大小估算（排除 node_modules/.git/脚本/素材源目录/README预览GIF/安装包产物） ----
 let total = 0;
 const walk = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
-      // 跳过不会进 npm 包的目录
-      if (!['node_modules', '.git', 'scripts', 'step01', 'step02', 'step03', 'preview'].includes(entry.name)) walk(p);
+      // 跳过不会进 npm 包的目录；dist/ 是 `npm run dist` 的安装包产物（约 160MB），
+      // 不随 npm 包发布，计入会让 200MB 上限失真。
+      if (!['node_modules', '.git', 'scripts', 'step01', 'step02', 'step03', 'preview', 'dist'].includes(entry.name))
+        walk(p);
     } else if (!entry.name.endsWith('.map')) {
       // 打包产物 tarball（npm pack 遗留）不计入自查口径
       if (!entry.name.endsWith('.tgz')) total += statSync(p).size; // sourcemap 不计

@@ -20,12 +20,16 @@ import {
   HELPER_STABLE_MS,
   HELPER_STOP_GRACE_MS,
   HelperProcess,
-  dshHomeDir,
   defaultElectronExe,
+  defaultHelperMain,
+  defaultLaunch,
+  dshHomeDir,
   ensureElectronDownload,
   hasGraphicalDisplay,
+  helperLaunchPlan,
   helperRunIsStable,
   helperSpawnEnv,
+  packagedElectronOverride,
   restartBackoffDelayMs,
   resolveElectronPath,
   shouldCircuitBreak,
@@ -291,6 +295,34 @@ describe('HelperProcess —— 退避/熔断的**接线**（纯函数之外，�
   });
 });
 
+describe('defaultLaunch —— 启动计划（ticket 01）', () => {
+  test('开发形态：Electron 二进制 + helper 脚本 + 计划自带的环境清理清单', () => {
+    withIsolatedHome((dir) => {
+      const fake = join(dir, 'electron.exe');
+      writeFileSync(fake, '');
+      const plan = defaultLaunch({ electronPath: fake });
+      assert.deepEqual(plan, {
+        command: fake,
+        args: [defaultHelperMain],
+        cwd: dshHomeDir(),
+        envDelete: ['ELECTRON_RUN_AS_NODE'],
+      });
+    });
+  });
+
+  test('helperPath 覆盖脚本入口，工作目录可单独指定', () => {
+    withIsolatedHome((dir) => {
+      const fake = join(dir, 'electron.exe');
+      const helper = join(dir, 'custom-helper.js');
+      writeFileSync(fake, '');
+      const plan = defaultLaunch({ electronPath: fake, helperPath: helper, cwd: join(dir, 'work') });
+      assert.equal(plan.command, fake);
+      assert.deepEqual(plan.args, [helper]);
+      assert.equal(plan.cwd, join(dir, 'work'));
+    });
+  });
+});
+
 describe('helperSpawnEnv —— spawn 环境构造（issue #63：ELECTRON_RUN_AS_NODE 必须删键）', () => {
   test('宿主环境带着污染 → 构造出的 env 里没有这个键', () => {
     // 宿主（DSH Desktop）自己就是 Electron 应用，process.env 里可能带着它；透传下去会让 helper
@@ -312,6 +344,16 @@ describe('helperSpawnEnv —— spawn 环境构造（issue #63：ELECTRON_RUN_AS
     assert.equal('ELECTRON_RUN_AS_NODE' in env, false);
     assert.equal(env.DSH_PET_BRIDGE, '1');
     assert.equal(env.DSH_PET_HOST_PID, '7');
+  });
+
+  test('调用方传入删除清单时逐键删除（清理规则由启动计划提供，不在 spawn 点硬编码）', () => {
+    const env = helperSpawnEnv(1, { ELECTRON_RUN_AS_NODE: '1', DSH_PET_TEMP: 'x', DSH_PET_KEEP: 'y' }, [
+      'ELECTRON_RUN_AS_NODE',
+      'DSH_PET_TEMP',
+    ]);
+    assert.equal('ELECTRON_RUN_AS_NODE' in env, false);
+    assert.equal('DSH_PET_TEMP' in env, false);
+    assert.equal(env.DSH_PET_KEEP, 'y');
   });
 
   test('其余宿主环境变量照常继承、extra 覆盖同名键', () => {
@@ -466,4 +508,86 @@ describe('HelperProcess failed spawn recovery', () => {
       },
     );
   }
+});
+
+describe('packagedElectronOverride —— 打包形态的显式覆盖判定（spec 解析顺序第 1 条）', () => {
+  const isFile = (path: string): boolean => path === '/exists/electron.exe';
+
+  test('DSH_PET_ELECTRON_PATH 非空且指向存在的文件 → 返回该路径', () => {
+    assert.equal(
+      packagedElectronOverride({ DSH_PET_ELECTRON_PATH: '/exists/electron.exe' }, isFile),
+      '/exists/electron.exe',
+    );
+  });
+
+  test('未设置 / 空字符串 → undefined（保持内置运行时）', () => {
+    assert.equal(packagedElectronOverride({}, isFile), undefined);
+    assert.equal(packagedElectronOverride({ DSH_PET_ELECTRON_PATH: '' }, isFile), undefined);
+  });
+
+  test('路径不存在 → undefined（保持内置运行时，绝不回落到下载）', () => {
+    assert.equal(packagedElectronOverride({ DSH_PET_ELECTRON_PATH: '/missing/electron.exe' }, isFile), undefined);
+  });
+});
+
+describe('helperLaunchPlan —— 打包形态不解析/不下载 Electron（ticket 02 + spec 解析顺序）', () => {
+  test('packaged：命令是应用自身 exe，参数是 --dsh-pet-helper', () => {
+    withIsolatedHome((dir) => {
+      const plan = helperLaunchPlan({ packaged: true, cwd: dir });
+      assert.equal(plan.command, process.execPath, '打包形态必须拉起自己，而不是解析出来的 Electron');
+      assert.deepEqual(plan.args, ['--dsh-pet-helper']);
+      assert.equal(plan.cwd, dir);
+      assert.deepEqual(plan.envDelete, ['ELECTRON_RUN_AS_NODE']);
+    });
+  });
+
+  test('packaged + DSH_PET_ELECTRON_PATH 指向存在的文件：显式覆盖为「外部 Electron + helper 入口」', () => {
+    withIsolatedHome((dir) => {
+      const fake = join(dir, 'fake-electron.exe');
+      writeFileSync(fake, '');
+      process.env.DSH_PET_ELECTRON_PATH = fake;
+      const plan = helperLaunchPlan({ packaged: true, cwd: dir });
+      assert.equal(plan.command, fake, '显式覆盖必须优先于内置运行时（spec 解析顺序第 1 条）');
+      assert.deepEqual(plan.args, [defaultHelperMain], '外部 Electron 需要 asar 内的 helper 脚本入口');
+      assert.equal(plan.cwd, dir);
+      assert.deepEqual(plan.envDelete, ['ELECTRON_RUN_AS_NODE']);
+    });
+  });
+
+  test('packaged + DSH_PET_ELECTRON_PATH 不存在：保持应用自身 exe 计划（不下载）', () => {
+    withIsolatedHome((dir) => {
+      process.env.DSH_PET_ELECTRON_PATH = join(dir, 'missing-electron.exe');
+      const plan = helperLaunchPlan({ packaged: true, cwd: dir });
+      assert.equal(plan.command, process.execPath);
+      assert.deepEqual(plan.args, ['--dsh-pet-helper']);
+    });
+  });
+
+  test('packaged + DSH_PET_ELECTRON_PATH 为空：保持应用自身 exe 计划（不下载）', () => {
+    withIsolatedHome((dir) => {
+      process.env.DSH_PET_ELECTRON_PATH = '';
+      const plan = helperLaunchPlan({ packaged: true, cwd: dir });
+      assert.equal(plan.command, process.execPath);
+      assert.deepEqual(plan.args, ['--dsh-pet-helper']);
+    });
+  });
+
+  test('packaged：显式 electronPath 也不能覆盖（启动计划是单一事实来源）', () => {
+    withIsolatedHome((dir) => {
+      const fake = join(dir, 'fake-electron.exe');
+      writeFileSync(fake, '');
+      const plan = helperLaunchPlan({ packaged: true, electronPath: fake, cwd: dir });
+      assert.equal(plan.command, process.execPath);
+    });
+  });
+
+  test('开发形态仍走 Electron 二进制 + helper 脚本（打包分支不污染原有行为）', () => {
+    withIsolatedHome((dir) => {
+      const fake = join(dir, 'fake-electron.exe');
+      writeFileSync(fake, '');
+      const plan = helperLaunchPlan({ electronPath: fake, cwd: dir });
+      assert.equal(plan.command, fake);
+      assert.deepEqual(plan.args, [defaultHelperMain]);
+    });
+  });
 });

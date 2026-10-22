@@ -1,4 +1,5 @@
 lib
+dist
 node_modules
 assets
 runtime/electron-helper/shared-core.js
@@ -6,3 +7,7 @@ cordis.patch.yml
 package-lock.json
 pnpm-lock.yaml
 pnpm-workspace.yaml
+# WiX 工程：prettier 没有 .wxs 解析器（会对 XML 声明报 SyntaxError），
+# 正确性由 src/host/msi-wix.test.ts 的契约测试与 scripts/build-msi.mjs 的实际编译守
+build/wix/
+build/wix/.out/

@@ -18,6 +18,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { downloadArtifact } from '@electron/get';
 
+import { LAUNCH_ENV_DELETE_KEYS, buildLaunchPlan, type LaunchPlan } from './launch-plan';
+import { callbackControlUrl, waitForControlUrl, type FocusWaitOptions } from './single-instance';
+
+/** 宿主句柄（startStandalone）也用这个类型暴露唤回入口 */
+export type { FocusWaitOptions };
+
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 export const packageRoot = resolve(here, '..');
@@ -49,7 +55,7 @@ export interface BridgeResponse {
 /** bridge 请求处理器（宿主侧与 handlePetRoute 对接；main.js 不在收到请求时带出宿主动作） */
 export type BridgeHandler = (req: BridgeRequest) => Promise<BridgeResponse>;
 
-interface HelperOptions {
+export interface HelperOptions {
   electronPath?: string;
   helperPath?: string;
   command?: string;
@@ -57,6 +63,11 @@ interface HelperOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
   restartDelayMs?: number;
+  /**
+   * 打包形态：宿主本身就是应用 exe，桌面壳由**同一个可执行文件**带 `--dsh-pet-helper`
+   * 拉起（角色分流见 desktop/main.mjs）。此时不解析 Electron、不触发下载。
+   */
+  packaged?: boolean;
   /** bridge 协议处理器：renderer 的每条请求（配置/余额/碎碎念/素材等）都经它应答 */
   bridgeHandler?: BridgeHandler;
 }
@@ -250,13 +261,76 @@ export async function ensureElectronDownload(options: EnsureElectronOptions = {}
   }
 }
 
-export function defaultLaunch(options: HelperOptions = {}): { command: string; args: string[] } {
+/**
+ * 开发形态的默认启动计划：Electron 二进制 + helper 脚本。
+ * 打包形态由同一可执行文件带 `--dsh-pet-helper` 启动，计划同样由 buildLaunchPlan 产出（ticket 03 接线）。
+ */
+export function defaultLaunch(options: HelperOptions = {}): LaunchPlan {
   const electronPath = resolveElectronPath([options.electronPath]);
   if (!electronPath) {
     throw new Error('dsh-pet: cannot resolve Electron executable. Set DSH_PET_ELECTRON_PATH or install electron.');
   }
-  const helperPath = options.helperPath || defaultHelperMain;
-  return { command: electronPath, args: [helperPath] };
+  return buildLaunchPlan({
+    packaged: false,
+    executablePath: electronPath,
+    helperEntry: options.helperPath || defaultHelperMain,
+    cwd: options.cwd || dshHomeDir(),
+  });
+}
+
+/**
+ * 打包形态下的显式 Electron 覆盖（spec「Electron 运行时」解析顺序第 1 条）。
+ *
+ * 只有 `DSH_PET_ELECTRON_PATH` **非空且指向真实存在的文件**才生效；未设置、空串、
+ * 路径不存在都返回 undefined —— 此时保持内置运行时，绝不回落到解析/下载（安装版断网可用）。
+ * env / exists 可注入，单测不需要改全局 process.env 或碰真实磁盘。
+ */
+export function packagedElectronOverride(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const candidate = env.DSH_PET_ELECTRON_PATH;
+  return candidate && exists(candidate) ? candidate : undefined;
+}
+
+/**
+ * 解析一次桌面 Helper 启动（命令 / 参数 / 工作目录 / 环境清理）。
+ *
+ * 打包形态是 ticket 02 的唯一分支：默认命令是**当前进程自己的可执行文件**，参数是角色参数
+ * `--dsh-pet-helper`，不能走 resolveElectronPath / ensureElectronDownload —— 安装包里已经带运行时，
+ * 运行期再下载既没必要也会在断网时失败。
+ *
+ * 唯一例外是 spec 解析顺序第 1 条：`DSH_PET_ELECTRON_PATH` 指向存在的文件时改用显式覆盖计划
+ * （外部 Electron 二进制 + asar 内的 helper 入口，即开发形态的命令构造）。路径不可用时仍走
+ * 内置运行时，两个分支都**不会触发下载**。
+ */
+export function helperLaunchPlan(options: HelperOptions = {}): LaunchPlan {
+  if (options.packaged) {
+    const override = packagedElectronOverride();
+    if (override) {
+      return buildLaunchPlan({
+        packaged: false, // 外部 Electron 二进制 + helper 脚本入口
+        executablePath: override,
+        helperEntry: defaultHelperMain,
+        cwd: options.cwd || dshHomeDir(),
+      });
+    }
+    return buildLaunchPlan({
+      packaged: true,
+      executablePath: process.execPath,
+      helperEntry: '',
+      cwd: options.cwd || dshHomeDir(),
+    });
+  }
+  if (options.command) {
+    return buildLaunchPlan({
+      packaged: false,
+      executablePath: options.command,
+      helperEntry: options.helperPath || defaultHelperMain,
+      cwd: options.cwd || dshHomeDir(),
+    });
+  }
+  return defaultLaunch(options);
 }
 
 /** 停止 helper 的等待上限（ms）：超过就升级 SIGKILL（issue #64） */
@@ -277,11 +351,24 @@ export const HELPER_STOP_GRACE_MS = 1000;
  * 设 `''` → 直接 abort（exit 134，`node::CreateEnvironment` 断言失败）；设 `'0'`/`'false'`/`'1'` →
  * 都进纯 Node 模式。运行期再 `delete process.env` 已经晚了（模块加载器在进程启动瞬间就定了）。
  */
-export function helperSpawnEnv(hostPid: number, extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+export function helperSpawnEnv(
+  hostPid: number,
+  extra?: Record<string, string | undefined>,
+  deleteKeys: readonly string[] = LAUNCH_ENV_DELETE_KEYS,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, DSH_PET_HOST_PID: String(hostPid), ...extra };
-  delete env.ELECTRON_RUN_AS_NODE;
+  // 清理清单由启动计划（buildLaunchPlan）提供，spawn 点只负责执行：
+  // 打包形态与开发形态的规则必须只有一份，否则很容易改了一边漏了另一边。
+  for (const key of deleteKeys) delete env[key];
   return env;
 }
+
+/**
+ * 当前进程内已拉起的桌面 Helper：单实例唤回是**宿主级**动作（second-instance 在宿主侧），
+ * 而 HelperProcess 实例由 `apply()` 内部创建，桌面主进程拿不到引用，故用模块级登记表。
+ * helper 正常停止时移出；崩溃自动重启的实例保留（重启后仍是同一个对象、同一套窗口）。
+ */
+const activeHelpers = new Set<HelperProcess>();
 
 export class HelperProcess {
   declare readonly options: HelperOptions;
@@ -295,6 +382,8 @@ export class HelperProcess {
   declare private lastStartAt: number;
   /** stdout 按行缓冲（协议行按 \n 切分）。用 declare + 构造器赋值，避免类字段降级出外部 helper */
   declare private stdoutBuffer: string;
+  /** helper 回调服务器的控制端点（从最近一条协议行的 cb 推导）；未收到 cb 前为 undefined */
+  declare private controlEndpoint?: string;
 
   constructor(options: HelperOptions = {}, logger: Logger = console) {
     this.options = options;
@@ -305,23 +394,23 @@ export class HelperProcess {
     this.restartFailures = 0;
     this.lastStartAt = 0;
     this.stdoutBuffer = '';
+    this.controlEndpoint = undefined;
   }
 
   start(): import('node:child_process').ChildProcess | undefined {
     if (this.child || this.stopping) return this.child;
     this.lastStartAt = Date.now();
-    const helperPath = this.options.helperPath || defaultHelperMain;
-    const launch = this.options.command
-      ? { command: this.options.command, args: this.options.args || [helperPath] }
-      : defaultLaunch(this.options);
-    const command = launch.command;
+    // 启动计划（命令/参数/工作目录/环境清理）统一由 helperLaunchPlan 产出：
+    // 开发形态（Electron + 脚本）与打包形态（同一个 exe + 角色参数）的差别不再散落在这里。
+    const launch = helperLaunchPlan(this.options);
+    // 自定义 command 的调用方可以继续覆盖参数（与旧行为一致）
     const args = this.options.args || launch.args;
 
     // issue #88：cwd 必须落在包目录之外 —— Windows 不允许重命名/删除活进程的当前目录，
     // 否则 pnpm 无法 rename 覆盖 node_modules/dsh-pet。助手侧资源解析与 CWD 无关，故用 $DSH_HOME。
-    const cwd = this.options.cwd || dshHomeDir();
+    const cwd = launch.cwd;
     mkdirSync(cwd, { recursive: true }); // spawn 的 cwd 不存在会直接 ENOENT
-    const child = spawn(command, args, {
+    const child = spawn(launch.command, args, {
       cwd,
       // DSH_PET_HOST_PID：把**宿主自己的** pid 交给 helper，让它能判断"宿主还在不在"
       // （helper 侧 host-liveness.js 每 2s kill(pid, 0) 一次；ESRCH 就自行退出，见 issue #56）。
@@ -332,11 +421,14 @@ export class HelperProcess {
       // 兜底，宿主非正常退出后 helper 会一直留着（issue #56 报告的就是这个）。
       // 环境变量统一经 helperSpawnEnv 构造：它会删掉会劫持 Electron 启动模式的 ELECTRON_RUN_AS_NODE
       // （issue #63，详见该函数注释）。
-      env: helperSpawnEnv(process.pid, this.options.env),
+      env: helperSpawnEnv(process.pid, this.options.env, launch.envDelete),
       stdio: ['pipe', 'pipe', 'pipe'], // stdin 也要：bridge 协议响应回写（main.js 请求经 stdout 上来）
       windowsHide: true,
     });
     this.child = child;
+    // 新一轮启动：旧回调端口已随旧进程失效，等新进程的首条协议行再记录。
+    this.controlEndpoint = undefined;
+    activeHelpers.add(this);
     child.once('error', (error) => {
       this.logger.error?.(`dsh-pet desktop helper failed to start: ${error.message}`);
       // Failed spawn (ENOENT/EACCES) emits error, but no exit. Do not leave
@@ -390,8 +482,6 @@ export class HelperProcess {
   /** 处理一条协议请求：交给宿主 bridgeHandler，结果按 id POST 回 main.js 的回调服务器
    *  （cb 由请求行携带；不走 stdin —— Electron 主进程收不到 piped stdin） */
   private async handleBridgeLine(line: string): Promise<void> {
-    const child = this.child;
-    if (!child?.stdin || !this.options.bridgeHandler) return;
     let req: BridgeRequest;
     try {
       req = JSON.parse(line.slice(BRIDGE_PREFIX.length)) as BridgeRequest;
@@ -400,6 +490,12 @@ export class HelperProcess {
       return;
     }
     if (typeof req.id !== 'number') return;
+    // 每条协议行都带 cb（壳的本地回调服务器地址）：记下 origin，供 second-instance 唤回
+    // 反向 POST /control。即便本实例没配 bridgeHandler，cb 本身也是有效的控制通道信息。
+    const controlEndpoint = callbackControlUrl(req.cb);
+    if (controlEndpoint) this.controlEndpoint = controlEndpoint;
+    const child = this.child;
+    if (!child?.stdin || !this.options.bridgeHandler) return;
     try {
       // bridgeHandler 返回完整 BridgeResponse（含 id）；异常时兜底 500
       const resp = await this.options.bridgeHandler(req);
@@ -441,6 +537,7 @@ export class HelperProcess {
    *  **停止后要立刻重启的场景必须用 stopAndWait()**，否则新旧进程会短暂重叠（issue #64）。 */
   stop(reason = 'plugin-disposed'): void {
     this.stopping = true;
+    activeHelpers.delete(this);
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = undefined;
     this.logger.debug?.(`dsh-pet desktop helper stopping (${reason})`);
@@ -470,6 +567,36 @@ export class HelperProcess {
         /* 已经退出了 */
       }
     });
+  }
+
+  /**
+   * 唤回已有宠物窗口（单实例唤回）：向 helper 回调服务器 POST `/control`。
+   *
+   * cb 只在 helper 发出首条 bridge 请求后才有值（自启延迟启动期间、或二次启动早于 helper
+   * 就绪时），因此在 waitMs 内轮询等待；等不到返回 false，调用方打一条告警即可。
+   * 唤回本身作用于 helper 的**全部**窗口（多宠物配置），见 control-request.js。
+   */
+  async focusWindows(options: FocusWaitOptions = {}): Promise<boolean> {
+    const url = await waitForControlUrl(() => this.controlEndpoint, options);
+    if (!url) {
+      this.logger.warn?.('[dsh-pet] 唤回桌面宠物失败：桌面 Helper 尚未建立回调通道');
+      return false;
+    }
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'focus' }),
+      });
+      if (!resp.ok) {
+        this.logger.warn?.(`[dsh-pet] 唤回桌面宠物失败：Helper 控制端点返回 ${resp.status}`);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.logger.warn?.(`[dsh-pet] 唤回桌面宠物失败：${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
   }
 
   private scheduleRestart(): void {
@@ -513,6 +640,20 @@ export class HelperProcess {
   private resolveMaxFailures(): number {
     return envPositiveInt(process.env.DSH_PET_RESTART_MAX_FAILURES, RESTART_MAX_FAILURES_DEFAULT);
   }
+}
+
+/**
+ * 唤回当前宿主进程内全部桌面 Helper 的宠物窗口（单实例 second-instance 的宿主级入口）。
+ *
+ * 桌面主进程（desktop/main.mjs）只拿到 `startStandalone` 的句柄，拿不到 `apply()` 内部
+ * 创建的 HelperProcess 实例，所以这里经模块级登记表找到它们。
+ * 返回是否有任一 Helper 成功收到控制请求；没有 Helper（纯浏览器/无桌面宠物）时返回 false。
+ */
+export async function focusDesktopWindows(options: FocusWaitOptions = {}): Promise<boolean> {
+  const helpers = [...activeHelpers];
+  if (helpers.length === 0) return false;
+  const results = await Promise.all(helpers.map((helper) => helper.focusWindows(options)));
+  return results.some(Boolean);
 }
 
 /**

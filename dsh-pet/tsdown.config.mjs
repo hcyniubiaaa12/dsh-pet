@@ -54,6 +54,21 @@ export default defineConfig([
     // 宿主半侧保持 ESM（由 DSH 的 Loader import），绝不能包 IIFE。
     entry: {
       index: 'src/host/index.ts',
+      // 打包后的主进程（desktop/main.mjs）是独立 ESM，不能 import 插件入口 lib/index.js
+      // （那里只有 name/inject/apply），角色分流要单独有一份产物。
+      'launch-plan': 'src/host/launch-plan.ts',
+      // 单实例唤回的启动时序闸门（second-instance ↔ 启动完成）：desktop/main.mjs 直接引它。
+      // 单独成入口是为了让打包入口不必加载整个宿主 bundle（helper 角色也会执行 main.mjs）。
+      'single-instance': 'src/host/single-instance.ts',
+      // 应用托盘的动作分发/配置拍平（ticket 06）：desktop/tray.mjs 直接引它，
+      // 不经过 lib/index.js（那里只有 Cordis 插件入口）。
+      'tray-actions': 'src/host/tray-actions.ts',
+      // 开机自启（ticket 09）：默认开启/自启延迟（desktop/main.mjs）与托盘勾选
+      // （desktop/tray.mjs）共用同一份登录项适配层。
+      autostart: 'src/host/autostart.ts',
+      // 运行时状态文件的读取/过期判定（ticket 07）：托盘（ESM）与桌面壳（CJS 动态 import）
+      // 共用同一份实现，不允许各自再解析。
+      'runtime-settings': 'src/host/runtime-settings.ts',
     },
     external: [/^@deepseek-ai\//, /^@electron\//, /^node:/],
   },
@@ -67,6 +82,9 @@ export default defineConfig([
     target: 'es2022',
     entry: {
       standalone: 'src/standalone/cli.ts',
+      // 可编程入口：打包后 Electron 主进程动态 import 它来跑宿主角色。
+      // 不能复用 lib/standalone.js —— 那个入口被 import 就会解析 argv 并启动 CLI。
+      'standalone-app': 'src/standalone/app.ts',
     },
     // tsdown 默认把 dependencies/peerDependencies 全部外部化（本包那三个 DSH 专有包正是
     // peerDependencies），所以这里必须先 noExternal 把它们拉回打包图，下面的 alias 才轮得到生效；

@@ -162,6 +162,7 @@ import {
   hasGraphicalDisplay,
   resolveElectronPath,
 } from './helper-process';
+import { openTargetForHostKind, resolveHostKind, type HostKind } from './host-kind';
 
 /** 插件行 id（与 cordis.patch.yml 一致） */
 export const name = 'pet';
@@ -181,13 +182,16 @@ const PACKAGE_MEMES_DIR = join(PACKAGE_ROOT_ASSETS, 'memes');
 const ROUTE_PREFIX = '/dsh-pet-7340';
 
 /**
- * 宿主是不是 **DSH 桌面应用**（Electron 宿主）。
+ * 宿主形态（ticket 08）：决定「打开网站」的去向。
  *
- * 判据只用 `process.versions.electron`：桌面应用以 `ELECTRON_RUN_AS_NODE=1` 跑宿主（见 dsh.cmd），
- * 该字段照样在；而 `dsh web` / 独立模式都是纯 Node 进程，取不到它。据此把「打开网站」自动分派：
- * 桌面宿主 → 唤起桌面应用窗口（helper 走 `dsh://open`），其余 → 浏览器打开站点。
+ * **显式优先**：启动方通过 `DSH_PET_HOST_KIND` 声明 desktop / site / packaged ——
+ * 打包安装版（自带 Electron 运行时）由 desktop/main.mjs 在启动 standalone 前设为 packaged，
+ * 否则它会因 `process.versions.electron` 存在而被误判成 DSH 桌面应用。
+ * **嗅探仅兼容一种形态**：DSH 桌面应用启动插件宿主时无法注入环境变量，此时回退到
+ * `process.versions.electron`（它以 ELECTRON_RUN_AS_NODE=1 跑，该字段仍在）；
+ * `dsh web` / 独立模式是纯 Node 进程，未设置时回落 site。
  */
-const isDesktopHost = (): boolean => Boolean(process.versions.electron);
+const hostKind = (): HostKind => resolveHostKind(process.env, process.versions);
 
 /** 不同扩展名对应的 Content-Type 映射 */
 const MIME: Record<string, string> = {
@@ -915,8 +919,10 @@ export function apply(ctx: any): void {
   /** 「无图形环境」提示只在进程生命周期内打一次，避免守护循环刷屏 */
   let displayWarned = false;
 
-  /** 用已确认存在的 Electron 路径拉起桌面 Helper（每只桌面宠物一个局部小窗口）。 */
-  const launchHelper = (electronPath: string | undefined): void => {
+  /** 用已确认存在的 Electron 路径拉起桌面 Helper（每只桌面宠物一个局部小窗口）。
+   *  packaged = 安装包形态：不传 Electron 路径，由 HelperProcess 用同一个 exe + 角色参数拉起
+   *  （若 DSH_PET_ELECTRON_PATH 指向存在的文件，helperLaunchPlan 会改为显式覆盖计划）。 */
+  const launchHelper = (electronPath: string | undefined, packaged = false): void => {
     if (helper || disposed) return;
     if (!hasDesktopPet && !desktopModeEverActive) return; // 无桌面宠物且桌面模式从未启用过：不启动
     const port = typeof ctx.webServer?.port === 'number' ? ctx.webServer.port : 0;
@@ -925,7 +931,7 @@ export function apply(ctx: any): void {
       if (!startRetryTimer) {
         startRetryTimer = setTimeout(() => {
           startRetryTimer = undefined;
-          launchHelper(electronPath);
+          launchHelper(electronPath, packaged);
         }, 500);
         startRetryTimer.unref?.();
       }
@@ -943,14 +949,15 @@ export function apply(ctx: any): void {
     helper = new HelperProcess(
       {
         electronPath,
+        packaged,
         env: {
           DSH_PET_CONFIG_URL: configUrl,
           // 已鉴权站点 URL（含本进程启动令牌）：只供 helper 的「打开网站」使用，任何日志都不许出现它
           DSH_PET_SITE_URL: siteUrl,
           // 宿主形态决定工具项「打开网站」的去向（同名菜单项，两端两种语义）：
           //   desktop = 宿主是 DSH 桌面应用 → 唤起桌面应用主窗口（helper 走 dsh://open，见 main.js）
-          //   site    = dsh web / 独立模式 → 系统默认浏览器打开站点（原行为，别破坏）
-          DSH_PET_OPEN_TARGET: isDesktopHost() ? 'desktop' : 'site',
+          //   site    = dsh web / 独立模式 / **打包安装版** → 系统默认浏览器打开本机站点（别破坏）
+          DSH_PET_OPEN_TARGET: openTargetForHostKind(hostKind()),
           DSH_PET_SCALE: '1',
           // 打开 bridge 协议：main.js 注册 dsh-pet-bridge scheme，把渲染端请求经管道转给宿主
           DSH_PET_BRIDGE: '1',
@@ -1007,6 +1014,16 @@ export function apply(ctx: any): void {
             '浏览器内宠物不受影响；如需在服务器上启用桌面模式，请配置 Xvfb 后设置 DSH_PET_DESKTOP_FORCE=1。',
         );
       }
+      return;
+    }
+    // 打包形态（ticket 02）：安装包已内置 Electron 运行时，桌面壳由同一个 exe 带
+    // `--dsh-pet-helper` 拉起。绝不能走 resolveElectronPath / ensureElectronDownload ——
+    // 安装版必须在断网时可用，运行期不许下载。
+    // 例外：DSH_PET_ELECTRON_PATH 指向存在的文件时，helperLaunchPlan 会改用
+    // 「外部 Electron + asar 内 helper 入口」的显式覆盖计划（spec 解析顺序第 1 条）；
+    // 路径为空/不存在则继续用内置运行时，同样不下载。
+    if (process.env.DSH_PET_PACKAGED === '1') {
+      launchHelper(undefined, true);
       return;
     }
     const found = resolveElectronPath();

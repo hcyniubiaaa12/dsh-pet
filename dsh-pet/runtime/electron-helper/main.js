@@ -45,8 +45,9 @@ try {
   );
   process.exit(3);
 }
-const { app, BrowserWindow, ipcMain, screen, shell, protocol, Tray, Menu, nativeImage } = electronApi;
+const { app, BrowserWindow, dialog, ipcMain, screen, shell, protocol, Tray, Menu, nativeImage } = electronApi;
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
 const { readFileSync, writeFileSync } = require('node:fs');
 const fsPromises = require('node:fs/promises');
@@ -60,7 +61,79 @@ const { HOST_POLL_MS, hostIsGone, isBrokenPipeError, parseHostPid } = require('.
 const { shouldLinearize, resolveForcedScale, resolvePetScale } = require('./dpi-linearization.js');
 // 托盘的平台差异（模板图 / 左键是否自动弹菜单 / Dock）：规则住在模块里，main.js 只接线
 const { trayPlatform } = require('./tray-platform.js');
+// 托盘菜单模板（纯逻辑）：宠物勾选 + 后续要接的应用项；main.js 只把描述变成 Electron 菜单
+const { buildTrayMenuTemplate } = require('./tray-menu.js');
 const { buildDeskGeometry } = require('./desktop-geometry.js');
+// DPI 探测子进程的启动命令（开发形态 = Electron + 脚本；打包形态 = 同一个 exe + 角色参数）
+const { probeSpawnCommand } = require('./probe-command.js');
+// 单实例唤回：宿主经 bridge 回调通道反向 POST /control，这里解析动作并唤回全部宠物窗口
+const { parseControlRequest, focusAllWindows } = require('./control-request.js');
+
+// ---------- AI 设置入口（ticket 07）----------
+//
+// 设置页 URL（含一次性 token）由宿主写进 `~/.dsh/dsh-pet/standalone-runtime.json`。只有安装版
+// 有本机设置页：插件形态（跑在 DSH 宿主里）不写这个文件，右键菜单也不出现该项。
+// 读取/校验必须与托盘共用 lib/runtime-settings.js（ESM 产物，壳是 CJS → 动态 import）；
+// 只有打包形态才加载，开发/插件形态没有这个入口。
+const AI_SETTINGS_ENABLED = process.env.DSH_PET_PACKAGED === '1';
+const runtimeSettingsReady = AI_SETTINGS_ENABLED
+  ? import(pathToFileURL(path.join(__dirname, '..', '..', 'lib', 'runtime-settings.js')).href).catch((error) => {
+      console.error(
+        '[dsh-pet-desktop-helper] AI 设置模块加载失败：',
+        String(error && error.message ? error.message : error),
+      );
+      return null;
+    })
+  : Promise.resolve(null);
+
+/** 读取/校验运行时状态文件；任何分支都不把 settingsUrl / token 写进日志 */
+async function readAiSettings() {
+  if (!AI_SETTINGS_ENABLED) return { available: false, reason: 'disabled', message: '' };
+  const runtimeSettings = await runtimeSettingsReady;
+  if (!runtimeSettings) {
+    return {
+      available: false,
+      reason: 'module-missing',
+      message: 'AI 设置模块不可用（安装可能不完整）。请重新安装 DSH Pet 后重试。',
+    };
+  }
+  return runtimeSettings.readRuntimeSettings(runtimeSettings.resolveDshHome());
+}
+
+/** 不可用时给用户可操作的提示（message 来自 runtime-settings，不含 URL/token） */
+async function showSettingsUnavailable(message) {
+  try {
+    await dialog.showMessageBox({
+      type: 'warning',
+      title: 'AI 设置',
+      message: '暂时无法打开 AI 设置',
+      detail: message,
+      buttons: ['知道了'],
+      noLink: true,
+    });
+  } catch (error) {
+    console.error(
+      '[dsh-pet-desktop-helper] 显示 AI 设置提示失败：',
+      String(error && error.message ? error.message : error),
+    );
+  }
+}
+
+async function openAiSettings() {
+  const settings = await readAiSettings();
+  if (!settings.available) {
+    // 文件缺失 / 已退出 / 端口不可连 / 内容损坏：明确告诉用户先启动安装版或稍后重试
+    await showSettingsUnavailable(settings.message);
+    return;
+  }
+  try {
+    await shell.openExternal(settings.settingsUrl);
+  } catch {
+    // openExternal 的异常信息可能回显 URL：只打固定文案，绝不把能力 URL 写进日志
+    console.warn('[dsh-pet-desktop-helper] 打开 AI 设置失败');
+    await showSettingsUnavailable('系统浏览器没有打开设置页。请稍后重试，或重启 DSH Pet。');
+  }
+}
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -192,7 +265,11 @@ function parseProbeOutput(text) {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
-/** 拉起探测子进程读主屏 scaleFactor（同一个 electron + 同一个 main.js，走 DPI_PROBE 分支） */
+/**
+ * 拉起探测子进程读主屏 scaleFactor（走 DPI_PROBE 分支）。
+ * 开发形态 = 同一个 Electron + helper 脚本；打包形态 = 同一个应用 exe + 角色参数
+ * （命令构造见 probe-command.js —— 打包后 `__filename` 在 asar 内，不能当脚本参数传）。
+ */
 function probePrimaryScale() {
   const opts = {
     env: { ...process.env, DSH_PET_DPI_PROBE: '1', DSH_PET_BRIDGE: '0', DSH_PET_SMOKE: '0' },
@@ -201,9 +278,14 @@ function probePrimaryScale() {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   };
+  const probe = probeSpawnCommand({
+    packaged: process.env.DSH_PET_PACKAGED === '1',
+    execPath: process.execPath,
+    helperEntry: __filename,
+  });
   let out = '';
   try {
-    out = execFileSync(process.execPath, [__filename, '--dsh-pet-dpi-probe'], opts);
+    out = execFileSync(probe.command, probe.args, opts);
   } catch (e) {
     // 只认 stdout，不认退出码：一个不开窗口的 Electron 进程调 app.exit() 在 Windows 上
     // 偶发 0xC0000005（退出期访问违例），但那时值早就写出来了，丢掉它纯属浪费一次冷启动。
@@ -520,7 +602,9 @@ function createPetWindows() {
       offBodyMs.delete(win.id);
     });
     win
-      .loadFile('index.html', {
+      // 必须用 __dirname 拼绝对路径：loadFile 的相对路径是相对 app.getAppPath() 解析的，
+      // 打包后那是 asar 根，而页面实际在 runtime/electron-helper/ 下（ticket 03）。
+      .loadFile(path.join(__dirname, 'index.html'), {
         query: {
           configUrl,
           bridge: BRIDGE ? '1' : '0',
@@ -591,6 +675,29 @@ function bridgeResolve(resp) {
 function startBridgeCallback() {
   const http = require('node:http');
   const server = http.createServer((req, res) => {
+    // 宿主控制（单实例唤回）：复用同一条回调通道，反向 POST /control。
+    // 与 /respond（宿主应答）严格分开，路径/方法/载荷由 control-request.js 判定。
+    if (req.url === '/control') {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const parsed = parseControlRequest({ method: req.method, url: req.url, body: raw });
+        if (!parsed.ok) {
+          res.writeHead(parsed.status, { 'content-type': 'text/plain' });
+          res.end(parsed.error);
+          return;
+        }
+        const focused = focusAllWindows(windows.values());
+        console.error('[dsh-pet-desktop-helper] control focus: ' + focused + ' window(s)');
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, focused }));
+      });
+      req.on('error', () => {
+        res.writeHead(400, { 'content-type': 'text/plain' });
+        res.end('dsh-pet: bad payload');
+      });
+      return;
+    }
     if (req.method !== 'POST' || req.url !== '/respond') {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('dsh-pet: not found');
@@ -672,8 +779,6 @@ async function hostRequest(method, url, body) {
   return { status: resp.status, body: await resp.text() };
 }
 
-const isDesktopDisplay = (display) => display === 'desktop' || display === 'both';
-
 /** 翻转「桌面位」：both↔web、desktop↔none——浏览器位保持不动，因此不制造新的单向门 */
 const toggleDisplay = (display) =>
   display === 'both' ? 'web' : display === 'web' ? 'both' : display === 'desktop' ? 'none' : 'desktop';
@@ -727,18 +832,21 @@ async function startTray() {
       }))
       .filter((pet) => pet.id);
     if (!pets.length) return; // 配置里没有任何宠物：没有可切换的对象，不建托盘
+    // 模板由纯函数产出（ticket 01）。当前只接宠物勾选；AI 设置 / 开机自启 / 数据目录 / 说明 / 退出
+    // 是模板里已有的应用项，留给后续 ticket 接线。视觉与行为必须与抽出前完全一致：
+    // 同样的 label、勾选态与点击翻转方向。
+    const petItems = buildTrayMenuTemplate({ pets })
+      .filter((item) => item.action === 'toggle-pet')
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        type: item.type,
+        checked: item.checked,
+        click: () => traySetPetDisplay(item.petId, toggleDisplay(item.display)),
+      }));
     tray = new Tray(trayIcon());
     tray.setToolTip('dsh-pet 桌面宠物');
-    tray.setContextMenu(
-      Menu.buildFromTemplate(
-        pets.map((pet) => ({
-          label: pet.name || pet.id,
-          type: 'checkbox',
-          checked: isDesktopDisplay(pet.display),
-          click: () => traySetPetDisplay(pet.id, toggleDisplay(pet.display)),
-        })),
-      ),
-    );
+    tray.setContextMenu(Menu.buildFromTemplate(petItems));
     // Windows 上 setContextMenu 只接管右键，左键默认什么都不做（macOS 相反：左键即弹菜单）
     if (TRAY_PLATFORM.leftClickPopsMenu) tray.on('click', () => tray.popUpContextMenu());
   } catch (e) {
@@ -782,8 +890,10 @@ app.whenReady().then(() => {
   // macOS：桌面宠物不该占 Dock——托盘才是桌面端的常驻入口，Dock 里多一个图标只会碍事
   if (TRAY_PLATFORM.hideDock && app.dock) app.dock.hide();
 
-  // 托盘：不 await（建窗与建托盘互不依赖），内部自己等 bridge 回调服务就绪
-  void startTray();
+  // 托盘：不 await（建窗与建托盘互不依赖），内部自己等 bridge 回调服务就绪。
+  // 打包形态（DSH_PET_PACKAGED=1）的托盘由宿主进程统一创建（desktop/tray.mjs），壳里再建
+  // 一个就是系统里的第二个图标；插件形态没有宿主托盘，壳仍是唯一入口，必须保留。
+  if (process.env.DSH_PET_PACKAGED !== '1') void startTray();
 
   createPetWindows();
 
@@ -942,6 +1052,20 @@ app.whenReady().then(() => {
       return;
     }
     openSite(url);
+  });
+
+  // 右键菜单「AI 设置…」的可用性（渲染端在弹菜单前查询）：
+  // 只有安装版且运行时文件通过校验（pid 存活、端口可连、URL 与 port 一致）才返回 true。
+  // 插件形态没有本机设置页 → 恒 false → 菜单里不出现这一项。
+  ipcMain.handle('pet:ai-settings-available', async () => {
+    const settings = await readAiSettings();
+    return settings.available === true;
+  });
+
+  // 点击「AI 设置…」：重新读取/校验运行时文件后交给系统默认浏览器。
+  // 缺失/过期/损坏时弹可读提示，绝不打开空白页；绝不把 URL/token 写进日志。
+  ipcMain.on('pet:open-settings', () => {
+    void openAiSettings();
   });
 
   // 显示器热更新：分辨率/缩放变化、插拔屏、旋转都会让桌面几何失效。原先几何只在

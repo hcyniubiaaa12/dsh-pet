@@ -20,6 +20,10 @@
 
 验证命令见 `dsh-pet/package.json` 的 `scripts`；CI 在 `.github/workflows/check.yml` 里跑同样的四项（typecheck / test / lint / format:check）。
 
+## 安装器
+
+改 `electron-builder.yml`、`build/installer.nsh`、`scripts/dist.mjs` 或任何 MSI/NSIS 行为之前，先读 **`docs/installer.md`** —— 那里记着「读第三方源码才能确认、改错会静默出坏包」的约定（msiwrapped 模板不可覆盖、`customUninstallPage` 插在执行之后、ICE64 抑制、数据目录清单），以及结论对应的 electron-builder 版本。
+
 ## Agent skills
 
 ### Issue tracker
@@ -32,4 +36,4 @@
 
 ### Domain docs
 
-单上下文（single-context）布局：仓库根 `GLOSSARY.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
+单上下文（single-context）布局：仓库根 `GLOSSARY.md` + `docs/adr/`，**两者都可能尚不存在**——不存在时静默跳过，不要建议先创建。详见 `docs/agents/domain.md`。

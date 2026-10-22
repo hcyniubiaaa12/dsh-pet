@@ -13,7 +13,11 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    // 只认本包自己的 @types：否则 tsc 会把祖先目录里的 node_modules/@types 当成隐式类型库。
+    // 单独 checkout 在深层临时目录（如 %TEMP%/xxx/node_modules/@types 恰好存在）时会
+    // 因此报出一堆与代码无关的 TS2688。
+    "typeRoots": ["./node_modules/@types"]
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
