@@ -199,13 +199,14 @@ npm run build && npm run standalone   # 仓库里（先构建）
 从 **[Releases](https://github.com/hcyniubiaaa12/dsh-pet/releases/latest)** 下载 `dsh-pet-Setup-<version>.msi`，双击安装即可（Windows Installer 会自动完成安装，默认装到 `%LOCALAPPDATA%\Programs\DSH Pet`）。
 
 1. 双击 `.msi`，按 Windows Installer 提示完成安装。
-2. 安装完成后从开始菜单或桌面快捷方式启动；托盘常驻。
-3. **不需要 DSH，也不需要 Node**：Electron 运行时与全部素材都在包里，首次启动不联网下载。
+2. 向导里有「安装位置」页，可以改安装目录（默认 `%LOCALAPPDATA%\Programs\DSH Pet`）；预检不通过的目录（盘根、含特殊字符、过长、不可写等）会就地提示，不会带病安装。
+3. 命令行静默安装时用 `INSTALLDIR` 指定目录：`msiexec /i dsh-pet-Setup-<version>.msi INSTALLDIR="D:\Apps\DSH Pet"`。
+4. 安装完成后从开始菜单或桌面快捷方式启动；托盘常驻。
+5. **不需要 DSH，也不需要 Node**：Electron 运行时与全部素材都在包里，首次启动不联网下载。
 
 - 每用户安装，不请求管理员权限（不弹 UAC）。
 - 安装包约 162MB（0.3.7 实测）。
-- MSI 是 NSIS 安装包的 Windows Installer 封装：卸载请用「设置 → 应用 → DSH Pet」或安装目录下的 `Uninstall DSH Pet.exe`（不要用 `msiexec /x`，它没有注册为独立 MSI 产品）。
-- 需要自定义安装目录或使用安装向导时，可从同一 Release 的构建产物使用 `.exe`（维护者本地构建；Release 默认只分发 `.msi`）。
+- MSI 是 NSIS 安装包的 Windows Installer 封装：卸载请用「设置 → 应用 → DSH Pet」或安装目录下的 `Uninstall DSH Pet.exe`（不要用 `msiexec /x`，它没有注册为独立 MSI 产品）。`.exe` 与 `.msi` 的安装行为完全一致——MSI 内部执行的就是同一个 NSIS 安装包，只是多了一层可选目录的向导；Release 默认只分发 `.msi`。
 
 ### 首次启动：SmartScreen 提示
 
@@ -238,6 +239,8 @@ npm run build && npm run standalone   # 仓库里（先构建）
 
 安装版与 DSH 插件形态可以并存，共用上面的配置与素材。但两者桌面小窗的 Chromium 缓存目录都是 `%APPDATA%\dsh-pet-electron-helper`，同时运行可能互相影响（仅告警，重启即可恢复）；安装版宿主自己的 Electron 配置在 `%APPDATA%\DSH Pet`。安装版不读取也不下载 `~/.dsh/electron`——运行时已内置，插件形态的桌面模式仍按上一节自动探测 / 下载。
 
+卸载时这三处目录的清理归属见下一节「卸载」：`%APPDATA%\DSH Pet` 与 `%APPDATA%\dsh-pet-electron-helper` 归「桌面壳缓存」勾选项管，`~/.dsh/dsh-pet/` 归「对话记忆与配置」「AI 设置」两项管，`~/.dsh/electron/` 归「内置 Electron 运行时」勾选项管。注意数据目录跟随 `DSH_HOME` 环境变量，但安装器/卸载器只认**执行那一刻**的环境变量——之后才改 `DSH_HOME` 的场景不在覆盖范围内。
+
 ### 开机自启
 
 默认开启：安装后第一次启动会把 DSH Pet 写入当前用户的登录启动项（`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，带 `--autostart`）；安装向导结束时应用会自动启动一次，因此装完即生效。
@@ -245,7 +248,7 @@ npm run build && npm run standalone   # 仓库里（先构建）
 - **关闭 / 开启**：托盘菜单勾选「开机自启」，立即写入或移除系统启动项；关闭后保持关闭，后续启动不会自动写回。
 - **启动行为**：自启启动会先延迟约 4 秒，期间不创建任何窗口、不抢焦点；延迟结束后宠物静默出现。
 - **任务管理器**：「启动」页能看到该项（`electron.app.DSH Pet`），也可以在那里禁用；托盘的勾选始终以系统真实状态为准。
-- **卸载**：自动移除启动项（升级安装不会误删）。
+- **卸载**：自动移除启动项，并删除初始化标记 `autostart-initialized`（升级安装不会误删）。重装后标记不存在，自启恢复**默认开启**；想保持关闭，装完在托盘再取消勾选即可。
 
 ### 托盘与右键菜单
 
@@ -264,9 +267,24 @@ npm run build && npm run standalone   # 仓库里（先构建）
 
 设置 → 应用 → 已安装的应用 → DSH Pet → 卸载；或运行安装目录下的 `Uninstall DSH Pet.exe`。
 
-- 会移除程序文件、开始菜单 / 桌面快捷方式、卸载注册项与开机自启项。
-- **用户数据默认保留**：`~/.dsh/dsh-pet/`（配置、记忆、素材、AI 设置）以及 `%APPDATA%\DSH Pet`、`%APPDATA%\dsh-pet-electron-helper`（缓存）。想彻底清理需手动删除这些目录。
-- 因为 `autostart-initialized` 保留，重装后仍尊重你上次的自启选择（不会重新默认开启）。
+- 会移除程序文件、开始菜单 / 桌面快捷方式、卸载注册项与开机自启项，并删除自启初始化标记 `autostart-initialized`。
+- **用户数据默认全部保留**：卸载向导有一个「选择要删除的用户数据」页，四个勾选项**默认全不勾**——不勾就一个字节都不碰，卸载只是「卸掉程序」。想彻底清理需勾选后继续，或用下面的静默参数。
+
+  | 勾选项 | 删除的目录 | 后果 |
+  |---|---|---|
+  | 对话记忆与配置 | `<DSH_HOME>\dsh-pet\` | 主宠物配置、对话记忆、宠物包（pet pack）、自定义动画与表情包（不含 API 密钥与自启标记） |
+  | AI 设置与 API 密钥 | `<DSH_HOME>\dsh-pet\standalone-ai.json` | 明文保存的 API Key，单列一项方便你在删之前意识到它是什么 |
+  | 内置 Electron 运行时（约 348 MB） | `<DSH_HOME>\electron\` | 安装版自带的 Electron，删除后不影响其它程序 |
+  | 桌面壳缓存（约 65 MB） | `%APPDATA%\dsh-pet-electron-helper\` 与 `%APPDATA%\DSH Pet\` | 桌面小窗的 Chromium 缓存与安装版宿主的本地设置 |
+
+  `<DSH_HOME>` 默认是 `%USERPROFILE%\.dsh`；设置过 `DSH_HOME` 时以**执行卸载那一刻**的环境变量为准。
+- **静默卸载**（命令行加 `/S`）没有勾选页，默认同样全保留；`/S /PURGE`（或 `--delete-app-data`，两者同义）跳过勾选页直接删掉上表全部四项。例如：
+
+  ```sh
+  "C:\Users\<你>\AppData\Local\Programs\DSH Pet\Uninstall DSH Pet.exe" /S /PURGE
+  ```
+- 多应用共享的 `%LOCALAPPDATA%\electron\Cache` 永不删除。
+- 因为 `autostart-initialized` 被卸载删除，**重装后恢复「默认开启自启」**——之前在托盘里主动关掉过自启的选择不会保留（升级安装不受影响，见下节）。
 
 ### 维护者：构建安装包
 
@@ -276,8 +294,8 @@ pnpm install
 npm run dist        # = npm run build && node scripts/dist.mjs
 ```
 
-- **产物**：`dsh-pet/dist/dsh-pet-Setup-<version>.msi` 是发布物（NSIS 安装包的 Windows Installer 封装）；`dsh-pet-Setup-<version>.exe` 是同一次构建的 NSIS 原始安装包（需要安装向导或自定义安装目录时使用）。`dist/` 已被 gitignore，构建后手动分发；`dist/win-unpacked/DSH Pet.exe` 可直接运行用于冒烟测试。
-- **MSI 目标**：`electron-builder.yml` 的 `win.target` 同时声明 `nsis` 与 `msiwrapped`；后者必须排在 `nsis` 之后（它封装前者的产物）。首次构建会下载 WiX 4（约数十 MB），之后走缓存。
+- **产物**：`dsh-pet/dist/dsh-pet-Setup-<version>.msi` 是发布物；`dsh-pet-Setup-<version>.exe` 是同一次构建产出的内层 NSIS 安装包（MSI 封装的输入，不单独分发）。`dist/` 已被 gitignore，构建后手动分发；`dist/win-unpacked/DSH Pet.exe` 可直接运行用于冒烟测试。
+- **MSI 外壳**：`electron-builder.yml` 的 `win.target` 只有 `nsis`；MSI 由 `scripts/build-msi.mjs` 把 NSIS 产物封进自维护的 WiX 项目 `build/wix/dsh-pet.wxs` 编出来——不使用 electron-builder 的 `msiwrapped`（其模板不可覆盖、没有安装目录 UI），这是 `npm run dist` 的最后一步，自动串起来。首次构建会下载 WiX 4（约数十 MB，复用 electron-builder 的缓存，之后离线可用）。安装目录页、命令行 `INSTALLDIR=`、目录预检都在这个 wxs 里实现，约定与陷阱见 `docs/installer.md`。
 - **前置**：Node.js ≥ 22.12 与 pnpm；首次构建时 electron-builder 会下载 NSIS 打包工具（需要网络，之后走缓存）。本机 `~/.dsh/electron` 存在时会作为 `electronDist` 直接复用，不重复下载 Electron；不存在时回退到 electron-builder 下载（`scripts/dist.mjs` 会把镜像指向 npmmirror）。
 - **体积**：安装包排除 `assets/preview`（README 展示用 GIF，约 65MB），0.3.7 实测约 162MB。
 - **不做代码签名**：没有购买证书，也避免引入签名与分发的额外复杂度；代价是 SmartScreen 会提示「未知发布者」（见上）。同时不做自动更新与 CI 构建——安装包本地构建后手动分发；升级 = 运行新版安装包覆盖安装，用户数据与自启状态保留。

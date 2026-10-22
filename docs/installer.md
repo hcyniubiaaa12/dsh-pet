@@ -19,13 +19,16 @@ Windows 安装包由 `electron-builder.yml`（配置）+ `build/installer.nsh`�
 |---|---|---|
 | `customCheckAppRunning` | 安装前发现实例在跑 | 提示并关闭，静默安装直接杀 |
 | `customInstall` | 文件落盘、注册表写完 | 写开机自启项与初始化标记 |
-| `customUnInstall` | 卸载段**开头**（删文件之前） | 清理 Run 项 |
+| `customUnInstall` | 卸载段**开头**（删文件之前） | 清理 Run 项；用户数据勾选项的删除（`/PURGE` / `--delete-app-data` 全删，自启标记独立删除） |
 | `customUnInit` | 卸载器 `un.onInit`（页面之前） | 未使用 |
 | `customUninstallPage` | **`MUI_UNPAGE_INSTFILES` 之后** | 未使用 —— 见下方陷阱 |
 
 **陷阱：`customUninstallPage` 插在卸载执行之后。** 想"先让用户勾选、再删"必须自己用
 `MUI_UNPAGE_CUSTOM` 或覆盖欢迎页，插在进度页之前。`assistedInstaller.nsh` 的卸载分支顺序是
 `UNPAGE_WELCOME → UNPAGE_INSTFILES → customUninstallPage → UNPAGE_FINISH`。
+本仓库的做法：定义 `removeDefaultUninstallWelcomePage` 让出欢迎页位置，再
+`UninstPage custom`（包在 `!ifdef BUILD_UNINSTALLER` 里）插出「勾选数据 → 进度 → 完成」的顺序。
+卸载器与 installer 是两次独立编译，页面用的全局变量与勾选状态都要按次 `Var` 声明。
 
 `MUI_UNPAGE_COMPONENTS` 也只在定义了 `customUnInstallSection` 时才启用（见 `installer.nsi` 顶部）。
 
@@ -104,20 +107,34 @@ Windows 安装包由 `electron-builder.yml`（配置）+ `build/installer.nsh`�
 
 标记的语义是「安装器/应用是否初始化过自启」，不是用户偏好。用户关掉自启由系统登录项状态承载。
 
+**卸载会删除这个标记**（`customUnInstall` 里与勾选项无关、非 `isUpdated` 一律删）：
+不删的话重装后应用以为「用户关过自启」，永远不再默认开启。所以真卸载后重装 = 自启恢复默认开启；
+升级安装（isUpdated）不删标记、不删 Run 项。
+
 ## 数据目录
+
+安装器里的「用户数据」路径唯一算法是 `build/installer.nsh` 的 `dshPetDataDir` 宏：
+`ReadEnvStr DSH_HOME`，空则回落 `$PROFILE\.dsh`。安装段与卸载段共用它；
+**只能读到执行那一刻的环境变量**，用户之后才改 `DSH_HOME` 不在支持范围。
 
 | 位置 | 内容 | 卸载是否清理 |
 |---|---|---|
-| `<DSH_HOME>\dsh-pet\` | 配置、记忆、宠物包、素材 | 勾选时 |
-| `<DSH_HOME>\dsh-pet\standalone-ai.json` | **明文** API 密钥 | 单独一项 |
+| `<DSH_HOME>\dsh-pet\` | 配置、记忆、宠物包、素材 | 勾选「对话记忆与配置」时 |
+| `<DSH_HOME>\dsh-pet\standalone-ai.json` | **明文** API 密钥 | 单独一项「AI 设置与 API 密钥」 |
 | `<DSH_HOME>\electron\` | 内置 Electron 运行时，约 348MB | 勾选时 |
-| `%APPDATA%\dsh-pet-electron-helper\` | 桌面壳 Chromium profile | 勾选时 |
-| `%APPDATA%\DSH Pet\` | 安装版宿主 userData | 勾选时 |
+| `%APPDATA%\dsh-pet-electron-helper\` | 桌面壳 Chromium profile | 勾选「桌面壳缓存」时 |
+| `%APPDATA%\DSH Pet\` | 安装版宿主 userData | 勾选「桌面壳缓存」时 |
+| `<DSH_HOME>\dsh-pet\autostart-initialized` | 自启初始化标记 | 非升级卸载一律删 |
 | `%LOCALAPPDATA%\electron\Cache` | **多应用共享**的下载缓存 | 永不 |
+
+卸载勾选页四项默认全不勾；静默卸载（`/S`）没有页面、同样全保留；
+`/PURGE` 或 `--delete-app-data`（不区分大小写，`${GetOptions}` 匹配）→ 四项全删。
 
 ## 检查覆盖
 
 - `src/host/packaging.test.ts`：安装包接线契约（配置项、包内布局、构建链）。
 - `src/host/autostart-wiring.test.ts`：NSIS 里的自启写入与清理。
+- `src/host/msi-wix.test.ts`：WiX 项目的目录页 / 预检 / 双通道（ticket 01）。
+- `src/host/installer-uninstall-options.test.ts`：卸载勾选页、`/PURGE`、isUpdated 保护（ticket 02）。
 - `.nsh` / `.wxs` **不进 prettier、不进制表**（prettier 不认识这些格式），
   所以契约测试是这两类文件唯一的自动防线。改完必须补断言。
