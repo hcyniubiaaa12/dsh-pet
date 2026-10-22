@@ -125,9 +125,14 @@ describe('NSIS 安装 —— 安装完成即默认开启自启（spec 偏差修�
     const macroAt = nsh.indexOf('!macro customInstall');
     const macroEnd = nsh.indexOf('!macroend', macroAt);
     const macro = nsh.slice(macroAt, macroEnd);
-    const markerGuardAt = macro.indexOf('${FileExists} "$PROFILE\\.dsh\\dsh-pet\\autostart-initialized"');
+    // 路径统一走 dshPetDataDir 宏（ticket 03），这里钉行为不钉字面路径
+    const markerGuardAt = macro.indexOf('${FileExists}');
+    assert.ok(
+      markerGuardAt >= 0 && /\$\{FileExists\}\s+"\$\w+\\dsh-pet\\autostart-initialized"/.test(macro),
+      'marker 判断走宏解析出的数据目录',
+    );
     const writeAt = macro.indexOf('WriteRegStr');
-    assert.ok(markerGuardAt >= 0 && markerGuardAt < writeAt, '注册表写入必须包在 marker 不存在的判断里');
+    assert.ok(markerGuardAt < writeAt, '注册表写入必须包在 marker 不存在的判断里');
     assert.match(macro, /FileWrite \$0/, '写入成功后落 marker，应用首次启动不再重复初始化');
   });
 });

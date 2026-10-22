@@ -19,9 +19,10 @@
 ; 升级安装会先运行旧版卸载器（isUpdated=true）：此时绝不能删除启动项，否则升级后
 ; 开机自启静默丢失（初始化标记还在，应用不会再次自动开启）。
 ;
-; 已知边界：安装段（customInstall）仍只认默认数据目录 `$PROFILE\.dsh\dsh-pet`，
-; 用户自定义 DSH_HOME 时读不到应用的标记 —— 由 ticket 03 统一到下面的 dshPetDataDir 宏。
-; 卸载段（customUnInstall）已改用该宏，两侧路径算法将来只需维护一处。
+; 已知边界：安装器只能读到**执行安装那一刻**的环境变量。用户之后才改 DSH_HOME
+; 的场景不支持 —— 两侧的标记路径都会停留在安装/卸载那一刻解析出来的目录。
+; 安装段（customInstall）与卸载段（customUnInstall）都走下面的 dshPetDataDir 宏，
+; 两侧路径算法只需维护一处。
 
 !include LogicLib.nsh
 !include FileFunc.nsh
@@ -198,12 +199,14 @@
 ; 注册表写入失败时不写标记，让应用首次启动还能重试；安装本身不因自启失败而中断。
 !macro customInstall
   Push $0
-  ${IfNot} ${FileExists} "$PROFILE\.dsh\dsh-pet\autostart-initialized"
+  Push $1
+  !insertmacro dshPetDataDir $1
+  ${IfNot} ${FileExists} "$1\dsh-pet\autostart-initialized"
     ClearErrors
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "electron.app.DSH Pet" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --autostart'
     ${IfNot} ${Errors}
-      CreateDirectory "$PROFILE\.dsh\dsh-pet"
-      FileOpen $0 "$PROFILE\.dsh\dsh-pet\autostart-initialized" w
+      CreateDirectory "$1\dsh-pet"
+      FileOpen $0 "$1\dsh-pet\autostart-initialized" w
       ${If} $0 != ""
         FileWrite $0 "installed by DSH Pet installer$\r$\n"
         FileClose $0

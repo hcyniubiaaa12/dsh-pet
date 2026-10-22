@@ -48,6 +48,22 @@ CI 里做不了。本文件只放「必须手工跑」的步骤与最近一次�
 
 - [ ] 卸载阶段不删除任何用户数据，自启标记也保留。
 
+## 验证 E：数据目录跟随 DSH_HOME（ticket 03）
+
+安装与卸载两侧的数据目录都按 `<DSH_HOME>`（未设置回落 `%USERPROFILE%\.dsh`）解析。
+
+`cmd /c "set DSH_HOME=D:\dsh-home-test && DSH Pet Setup.exe /S"` 安装后：
+
+- [ ] 标记落在 `D:\dsh-home-test\dsh-pet\autostart-initialized`，`%USERPROFILE%\.dsh\dsh-pet\` 不因此产生标记；
+- [ ] 同一环境下 `Uninstall DSH Pet.exe /S` 卸载，该标记被删除。
+
+不设 `DSH_HOME` 再装卸一遍：
+
+- [ ] 行为与旧行为一致：标记落在 `%USERPROFILE%\.dsh\dsh-pet\autostart-initialized`，卸载后删除。
+
+注意 `DSH_HOME` 要在**起安装器的那个进程**里可见（上面 set 的写法即可；
+`setx` 只对之后新开的进程生效）。安装器只认安装那一刻的环境变量。
+
 ## 实测结论
 
 - 2026-10-21，NSIS exe（electron-builder 26.15.3，分支 `ticket/ic-02-uninstall-options`）：
