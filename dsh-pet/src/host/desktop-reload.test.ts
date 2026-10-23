@@ -65,6 +65,23 @@ describe('桌面端「重载配置」—— 菜单 → 宿主重启 Helper', () 
     assert.equal(calls.length, 4, 'PUT /config、POST /config、POST /reload、POST /pet-display 都应走 syncDesktop()');
   });
 
+  test('/hide-on-fullscreen 只写配置，绝不重启桌面壳（ticket 09：托盘开关点击不闪宠物窗口）', () => {
+    const block = /if \(rest === 'hide-on-fullscreen'\) \{([\s\S]*?)\n {4}\}/.exec(host);
+    assert.ok(block, '宿主必须有 /hide-on-fullscreen 路由（托盘开关的写配置入口）');
+    const body = block[1];
+    assert.ok(/method !== 'POST'/.test(body), '只接受 POST（动作端点口径）');
+    assert.ok(/saveUserConfig/.test(body), '写盘必须走 saveUserConfig 白名单 + 透传');
+    assert.ok(
+      !/syncDesktop|writeSection/.test(
+        body
+          .split('\n')
+          .filter((line) => !line.trim().startsWith('//'))
+          .join('\n'),
+      ),
+      '不重启 Helper、不发配置变更信号：托盘点击方自持乐观勾选态',
+    );
+  });
+
   test('shared 菜单契约放行 reload（桌面壳注入该动作，类型必须包含它）', () => {
     assert.ok(/'reload'/.test(menu), "shared/menu.ts 的 MenuLeaf.action 必须包含 'reload'");
   });

@@ -23,8 +23,20 @@ describe('桌面壳 —— 打包形态不再自建托盘', () => {
     assert.match(source, /if \(process\.env\.DSH_PET_PACKAGED !== '1'\) void startTray\(\);/);
   });
 
-  test('壳仍用纯函数模板（本 ticket 不改模板，也不在壳里另拼应用项）', () => {
-    assert.match(source, /buildTrayMenuTemplate\(\{ pets \}\)/);
+  test('壳仍用纯函数模板（不在壳里另拼菜单文案）', () => {
+    assert.match(source, /buildTrayMenuTemplate\(\{ pets, hideOnFullscreen \}\)/);
+  });
+
+  test('全屏隐藏开关接线：POST /hide-on-fullscreen + 本地乐观翻勾，绝不请求 /reload（ticket 09）', () => {
+    assert.match(source, /toggle-hide-on-fullscreen/);
+    assert.match(source, /\/hide-on-fullscreen/);
+    // 点击处理器只写配置 + 重建菜单：不得触发任何重启壳的路径
+    const clickAt = source.indexOf("action === 'toggle-hide-on-fullscreen'");
+    assert.ok(clickAt > 0, '壳托盘必须有该动作的接线分支');
+    const clickBlock = source.slice(clickAt, source.indexOf('});', clickAt));
+    assert.match(clickBlock, /traySetHideOnFullscreen\(/);
+    assert.match(clickBlock, /rebuildTrayMenu\(\)/);
+    assert.ok(!/\/reload|syncDesktop/.test(clickBlock), '开关点击绝不请求 /reload（不重启桌面壳）');
   });
 });
 
@@ -74,6 +86,16 @@ describe('desktop/tray.mjs —— 宿主托盘接线', () => {
   test('只创建一个 Tray（单一图标），并暴露仅测试用的钩子', () => {
     assert.equal((source.match(/new Tray\(/g) ?? []).length, 1, '重复创建会得到多个托盘图标');
     assert.match(source, /globalThis\.__dshPetTray/);
+  });
+
+  test('全屏隐藏开关：读 main 条目配置、走 /hide-on-fullscreen 写盘、乐观翻勾（ticket 09）', () => {
+    assert.match(source, /set-hide-on-fullscreen/);
+    assert.match(source, /\/dsh-pet-7340\/hide-on-fullscreen/);
+    assert.match(source, /state\.hideOnFullscreen = effect\.enabled/);
+    // 1s 轮询会从盘上自然对齐，这里不得有额外的重启/重载调用
+    const at = source.indexOf("case 'set-hide-on-fullscreen'");
+    const block = source.slice(at, source.indexOf('case ', at + 10));
+    assert.ok(!/syncDesktop|\/reload/.test(block), '宿主托盘开关同样不重启桌面壳');
   });
 });
 

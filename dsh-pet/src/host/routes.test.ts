@@ -723,3 +723,25 @@ describe('/pet-display —— 业务失败一律 200 + ok:false（不用 400/404
     assert.equal(body.reason, 'bad-request');
   });
 });
+
+describe('/hide-on-fullscreen —— 托盘开关的写配置入口（ticket 09）', () => {
+  test('GET → 405（写端点；方法错是协议层错误）', async () => {
+    assert.equal((await call('/dsh-pet-7340/hide-on-fullscreen')).status, 405);
+  });
+
+  test('请求体不是合法 JSON → 400（协议层错误，与其它端点同一口径）', async () => {
+    const r = await call('/dsh-pet-7340/hide-on-fullscreen', 'POST', '{ 不是 json');
+    assert.equal(r.status, 400);
+    assert.match(r.body, /invalid JSON body/);
+  });
+
+  test('enabled 非布尔 → 200 + bad-request（参数校验在读盘之前，源码形态下即可断言短路顺序）', async () => {
+    for (const body of [{}, { enabled: 'true' }, { enabled: 1 }]) {
+      const r = await call('/dsh-pet-7340/hide-on-fullscreen', 'POST', JSON.stringify(body));
+      assert.equal(r.status, 200, JSON.stringify(body));
+      const parsed = JSON.parse(r.body) as { ok: boolean; reason: string };
+      assert.equal(parsed.ok, false, JSON.stringify(body));
+      assert.equal(parsed.reason, 'bad-request', JSON.stringify(body));
+    }
+  });
+});

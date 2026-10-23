@@ -83,6 +83,8 @@ export const ID_FORBIDDEN = /[\\/:\x00-\x1f]/;
  *   - `physics`：拖拽抛掷手感；`petCollision` 更是**跨宠物**行为（相撞按动量守恒弹开），
  *     按种类分在语义上站不住：两只不同种类的宠物相撞时用谁的系数？
  *   - `confineToScreen`：多屏是用户环境 / 使用习惯，不是宠物属性
+ *   - `hideOnFullscreen`：全屏时要不要把宠物藏起来——看的是**前台应用**（用户此刻在干嘛），
+ *     不是宠物属性；关掉 = 任何情况下都守在屏幕上
  *   - `font`：字体种类 / 字号 / 是否随宠物缩放是**看的人**的偏好，不是某个种类的属性——
  *     同一套字体偏好用在所有宠物（含 pet pack）才符合预期
  *
@@ -94,6 +96,7 @@ const GLOBAL_DEFAULT_KEYS = [
   'physics',
   'font',
   'confineToScreen',
+  'hideOnFullscreen',
   'whisperImageEnabled',
   'chatImageEnabled',
   'chatImageLimit',
@@ -376,6 +379,8 @@ function topFieldValid(key: string, value: unknown): boolean {
       return typeof value === 'boolean';
     case 'confineToScreen':
       return typeof value === 'boolean';
+    case 'hideOnFullscreen':
+      return typeof value === 'boolean';
     case 'animations':
       return animationsValid(value);
     case 'animationWeights':
@@ -415,7 +420,7 @@ function eventsRefreshSecValid(value: unknown): boolean {
 /**
  * 文件宠物条目的合并基座：内置默认 + 白名单字段改用**用户层**的值。
  *
- * 为什么：那 9 个字段是用户级成本/偏好/环境/节奏参数，不是种类属性——用户在设置页改一次，
+ * 为什么：那些字段是用户级成本/偏好/环境/节奏参数，不是种类属性——用户在设置页改一次，
  * 期望所有宠物（含 pet pack）都生效。没有这一步，文件宠物只能拿到内置默认值，
  * 于是"设置页写着全局、实际只影响主宠物"（见 GLOBAL_DEFAULT_KEYS 的判据）。
  *
@@ -695,6 +700,10 @@ export function saveUserConfig(
   if (cie !== undefined && typeof cie !== 'boolean') return null;
   const cts = o.confineToScreen;
   if (cts !== undefined && typeof cts !== 'boolean') return null;
+  // hideOnFullscreen（全屏时隐藏，设置页开关写的就是它）：与 confineToScreen 同一套语义——
+  // 传了就校验后进白名单，没传则走下面的透传保留。
+  const hfs = o.hideOnFullscreen;
+  if (hfs !== undefined && typeof hfs !== 'boolean') return null;
   // physics（拖拽抛掷手感，设置页「物理」区可图形化编辑）：整段校验——physicsValid 与读取侧
   // 是同一份规则（gravity/groundFriction ≥ 0、restitution ∈ [0,1]、throwPower > 0、两个布尔）。
   // 传了就按白名单写入；没传则走下面的透传保留（用户手改的值原样不动）。
@@ -732,6 +741,7 @@ export function saveUserConfig(
   if (wie !== undefined) outConfig.whisperImageEnabled = wie;
   if (cie !== undefined) outConfig.chatImageEnabled = cie;
   if (cts !== undefined) outConfig.confineToScreen = cts;
+  if (hfs !== undefined) outConfig.hideOnFullscreen = hfs;
   if (ph !== undefined) outConfig.physics = ph;
   if (fo !== undefined) outConfig.font = fo;
   if (wm !== undefined) outConfig.whisperModel = cleanModel(wm as Record<string, unknown>);
@@ -748,6 +758,7 @@ export function saveUserConfig(
   if (wie !== undefined) bodyOwned.add('whisperImageEnabled');
   if (cie !== undefined) bodyOwned.add('chatImageEnabled');
   if (cts !== undefined) bodyOwned.add('confineToScreen');
+  if (hfs !== undefined) bodyOwned.add('hideOnFullscreen');
   if (ph !== undefined) bodyOwned.add('physics');
   if (fo !== undefined) bodyOwned.add('font');
   if (wm !== undefined) bodyOwned.add('whisperModel');

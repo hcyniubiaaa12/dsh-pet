@@ -32,6 +32,7 @@ const ENTRY_FIELDS: Array<keyof Pet> = [
   'eventsRefreshSec',
   'physics',
   'confineToScreen',
+  'hideOnFullscreen',
   'workStatusTexts',
   'whisperModel',
   'chatModel',
@@ -58,6 +59,8 @@ describe('flattenConfigPets —— 成品 → 渲染列表的唯一填充点', (
         // 拖拽跟手第一帧读的就是它；缺失即 TypeError（本文件存在的直接原因）
         const physics = p.physics as { throwPower?: unknown };
         assert.equal(typeof physics.throwPower, 'number', 'physics.throwPower 必须是数字');
+        // 全屏隐藏开关：桌面壳渲染端读的就是实例上的这份（漏吹 = 永远 undefined）
+        assert.equal(p.hideOnFullscreen, true, '内置默认配置里 hideOnFullscreen 必须吹进每只实例');
         // animations 是 { idle/turn/drag/clicks/moves/categories/events } 段：待机池必须非空
         const animations = p.animations as { idle?: unknown };
         assert.ok(Array.isArray(animations.idle) && animations.idle.length > 0, 'animations.idle 应为非空待机动画池');

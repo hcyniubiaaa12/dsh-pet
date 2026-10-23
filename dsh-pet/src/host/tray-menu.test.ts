@@ -106,6 +106,23 @@ describe('buildTrayMenuTemplate —— 应用菜单项（ticket 06 接线用）'
     }
   });
 
+  test('全屏隐藏开关是 checkbox，勾选态由 hideOnFullscreen 配置值决定（ticket 09）', () => {
+    for (const hideOnFullscreen of [true, false]) {
+      const template: MenuItem[] = buildTrayMenuTemplate({
+        pets: [{ id: 'blue', name: '小蓝', display: 'desktop' }],
+        hideOnFullscreen,
+      });
+      const item = findAction(template, 'toggle-hide-on-fullscreen');
+      assert.ok(item, '全屏隐藏项必须存在');
+      assert.equal(item.id, 'hide-on-fullscreen');
+      assert.equal(item.type, 'checkbox');
+      assert.equal(item.checked, hideOnFullscreen);
+    }
+    // 缺省（旧调用方没传）按配置默认 true 勾上
+    const fallback: MenuItem[] = buildTrayMenuTemplate({ pets: [{ id: 'a', name: 'A', display: 'desktop' }] });
+    assert.equal(findAction(fallback, 'toggle-hide-on-fullscreen')?.checked, true);
+  });
+
   test('数据目录 / 使用说明 / 退出三项都在，且退出项始终存在', () => {
     const template: MenuItem[] = buildTrayMenuTemplate({ pets: [] });
     assert.ok(findAction(template, 'open-data-dir'));
@@ -129,6 +146,7 @@ describe('buildTrayMenuTemplate —— 应用菜单项（ticket 06 接线用）'
     assert.equal(findAction(template, 'toggle-pet')?.id, 'pet:blue');
     assert.equal(findAction(template, 'open-settings')?.id, 'settings');
     assert.equal(findAction(template, 'toggle-autostart')?.id, 'autostart');
+    assert.equal(findAction(template, 'toggle-hide-on-fullscreen')?.id, 'hide-on-fullscreen');
     assert.equal(findAction(template, 'open-data-dir')?.id, 'data-dir');
     assert.equal(findAction(template, 'show-help')?.id, 'help');
     assert.equal(findAction(template, 'quit')?.id, 'quit');
