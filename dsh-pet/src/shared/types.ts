@@ -121,6 +121,8 @@ export interface Pet {
   physics?: PhysicsParams;
   /** 全局默认：是否锁定在当前屏幕（归属规则同 physics）——抛掷与自主漫游都只在当前所在那块屏内活动 */
   confineToScreen?: boolean;
+  /** 全局默认：全屏时隐藏（前台应用全屏就把宠物藏起来，false = 永远可见；归属规则同 physics） */
+  hideOnFullscreen?: boolean;
   /** 条目级：工作状态气泡文案（二维数组，外层索引 = workStatus 档位 0..5，内层每档可多句随机抽；
    *  host 合并已填默认，拍平时吹入；整字段缺失 = 不弹工作状态文本，只播动画） */
   workStatusTexts?: string[][];

@@ -6,7 +6,7 @@
 //     workStatusEnabled / fixedEnabled / display / position
 //   · 全局默认（本文件是默认值；用户在 main-config.jsonc 里写一次就对**所有宠物**生效，
 //     含 pet/<名>-config.json 定义的种类；种类文件自己写了则覆盖自己那份）：
-//     physics / font / confineToScreen / whisperImageEnabled / chatImageEnabled /
+//     physics / font / confineToScreen / hideOnFullscreen / whisperImageEnabled / chatImageEnabled /
 //     chatMemoryRounds / whisperModel / chatModel / eventsRefreshSec
 //   · 条目级（每个条目一份：main 一份、每个种类各一份；种类文件顶层可覆盖）：
 //     whisperPrompt / memes / workStatusTexts / animations / animationWeights
@@ -102,6 +102,12 @@
   // 全局默认：用户层写一次对**所有宠物**生效（含种类）；种类文件 pet/<名>-config.json 顶层写了则用自己那份。
   // 仅影响桌面模式（浏览器 overlay 本来就只在视口内活动）。改动后刷新或重启生效。
   "confineToScreen": false,
+  // ===================== 全屏时隐藏（根字段，全局默认；种类文件 pet/<名>-config.json 顶层可覆盖） =====================
+  // true（默认）= 前台应用进入全屏（视频 / 游戏 / 演示）时把宠物藏起来，退出全屏即回来；
+  // false = 任何情况下都守在屏幕上（全屏应用也挡不住它出现）。
+  // 全局默认：用户层写一次对**所有宠物**生效（含种类）；种类文件 pet/<名>-config.json 顶层写了则用自己那份。
+  // 必填布尔值，缺失即配置错误。配置改动不热更新到桌面壳渲染进程：走「写盘 → 重启桌面壳」生效。
+  "hideOnFullscreen": true,
   // ===================== 工作状态联动文案（条目级，与 animations/physics 同级；种类文件 pet/<名>-config.json 顶层可覆盖） =====================
   // 工作状态气泡文本（pets[].workStatusEnabled 开启时展示；仅在 events.workStatus 动画触发时弹）。
   // 结构 = 二维数组，外层索引即档位（与 events.workStatus 动画索引一一对应，勿在中间插入新档）：

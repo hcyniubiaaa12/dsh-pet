@@ -229,7 +229,7 @@ $DSH_HOME/dsh-pet/pet/
 - **素材只查自己的**：素材目录名 = 文件名前缀（`pet/pig-config.json` → `pet/pig-animation/`），该种类所有实例共用；动画 URL 为 `/thumb/<前缀>/<名>.webm`，查不到即 404 报错——**绝不落到 `main-animation` 或包内素材**。配图同理：`pet/<前缀>-memes/` 存在时**只查它**（`/pic/memes/<前缀>/<名>.png` 查不到即 404），绝不回落到用户 `memes/` 或包内 `assets/memes/`
 - **动画池不回落全局**：`animations` / `animationWeights` 是该种类的（结构校验与主配置同一套规则）
 - `pets` 数组非空、每只字段（id/size/balanceEnabled/display/position）完整合法、数组内 id 唯一——**id 随意写、数量随意**，与主配置完全一致
-- **用户层的「全局默认」会生效**：`physics` / `confineToScreen` / `whisperImageEnabled` / `chatImageEnabled` / `chatImageLimit` / `chatMemoryRounds` / `whisperModel` / `chatModel` / `eventsRefreshSec` 这 9 个是**用户级成本 / 偏好 / 环境 / 节奏**参数——用户在设置页（写进 `main-config.jsonc`）改一次就对该种类生效；种类文件顶层写了则用自己那份
+- **用户层的「全局默认」会生效**：`physics` / `confineToScreen` / `hideOnFullscreen` / `whisperImageEnabled` / `chatImageEnabled` / `chatImageLimit` / `chatMemoryRounds` / `whisperModel` / `chatModel` / `eventsRefreshSec` 这 10 个是**用户级成本 / 偏好 / 环境 / 节奏**参数——用户在设置页（写进 `main-config.jsonc`）改一次就对该种类生效；种类文件顶层写了则用自己那份
 - **所有顶层字段都是整段替换**：写了就整段用自己的，缺的子键不会从内置默认补回来（消费端各自兜底：余额周期读不到按 1800、碎碎念按 300）
 - `notificationsEnabled` 是**全局**（只读 `main` 条目那份）：种类文件里写了**不生效**（不报错）
 - `eventsRefreshSec` 内部两个键的**消费端**不同：`.whisper` 按宠物所属条目读（种类文件顶层可覆盖）；`.balance` 只读 `main` 条目（余额是一个账号一份数据，host 只有一个刷新定时器）

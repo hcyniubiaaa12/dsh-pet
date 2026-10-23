@@ -413,6 +413,75 @@ describe('saveUserConfig —— 抛掷锁定开关（白名单 + 透传保留）
   });
 });
 
+describe('readAllConfig —— 全屏隐藏开关 hideOnFullscreen（缺失取默认 / 非法回退默认）', () => {
+  test('内置默认有值 → 用户层没写时读得到（默认 true = 全屏时隐藏）', () => {
+    const merged = readAllConfig(withBase({ hideOnFullscreen: true }));
+    assert.equal(merged.main.hideOnFullscreen, true);
+  });
+
+  test('用户层写了 false → 覆盖内置默认（关掉全屏隐藏）', () => {
+    const merged = readAllConfig(withBase({ hideOnFullscreen: true }, { hideOnFullscreen: false }));
+    assert.equal(merged.main.hideOnFullscreen, false);
+  });
+
+  test('用户层写了非法值 → 回退内置默认', () => {
+    const merged = readAllConfig(withBase({ hideOnFullscreen: true }, { hideOnFullscreen: 'yes' }));
+    assert.equal(merged.main.hideOnFullscreen, true); // 回退默认 true
+  });
+
+  test('内置默认缺键 → 用户层的值流不进来（合并器只遍历内置默认的键）', () => {
+    // 防的就是「只在用户层写了、内置默认忘了加」的死局：BASE（测试夹具）不含该键
+    const merged = readAllConfig(withBase({}, { hideOnFullscreen: false }));
+    assert.equal('hideOnFullscreen' in merged.main, false);
+  });
+
+  test('保存后重新读配置 → 值仍是用户写入的那个（透传保留 + 本请求字段登记回归）', () => {
+    // 钉 saveUserConfig 的 bodyOwned 登记：漏登记时 outConfig 写了值、又被透传循环用
+    // 磁盘旧值盖回去——只看 saveUserConfig 返回值抓不到（返回值是对的），必须走完整落盘读回。
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-pet-hide-fs-'));
+    try {
+      const paths: ConfigPaths = {
+        defaultFile: join(dir, 'default.jsonc'),
+        userFile: join(dir, 'main-config.jsonc'),
+        petDir: join(dir, 'pet'),
+      };
+      writeFileSync(paths.defaultFile, JSON.stringify({ ...BASE, hideOnFullscreen: true }));
+      const saved = saveOnce(
+        { pets: PETS, hideOnFullscreen: false },
+        { pets: PETS, hideOnFullscreen: true }, // 磁盘旧值 true（与新值相反才抓得到）
+      );
+      assert.equal(saved?.hideOnFullscreen, false, 'saveUserConfig 返回值必须已是新值');
+      writeFileSync(paths.userFile, JSON.stringify(saved));
+      const merged = readAllConfig(paths);
+      assert.equal(merged.main.hideOnFullscreen, false, '落盘再读回必须仍是用户写的 false');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('saveUserConfig —— 全屏隐藏开关 hideOnFullscreen（白名单 + 透传保留）', () => {
+  test('随请求体写入（设置页开关）', () => {
+    const out = saveOnce({ pets: PETS, hideOnFullscreen: false });
+    assert.equal(out?.hideOnFullscreen, false);
+  });
+
+  test('未传时不写入（不凭空造字段）', () => {
+    const out = saveOnce({ pets: PETS });
+    assert.equal('hideOnFullscreen' in (out ?? {}), false);
+  });
+
+  test('传非布尔 → 整体拒绝（宿主回 400）', () => {
+    assert.equal(saveOnce({ pets: PETS, hideOnFullscreen: 'yes' }), null);
+    assert.equal(saveOnce({ pets: PETS, hideOnFullscreen: 1 }), null);
+  });
+
+  test('不进 pets[]：per-pet 写了也不落盘（不是宠物属性）', () => {
+    const out = saveOnce({ pets: [{ ...PETS[0], hideOnFullscreen: false }] });
+    assert.equal('hideOnFullscreen' in ((out?.pets as Record<string, unknown>[])[0] ?? {}), false);
+  });
+});
+
 describe('saveUserConfig —— 宠物固定 fixedEnabled（per-pet 白名单）', () => {
   /** 取落盘后的第 n 只宠物 */
   const petAt = (out: Record<string, unknown> | null, n = 0): Record<string, unknown> =>
@@ -771,7 +840,7 @@ describe('syncUserConfigFromDefault —— 同步（内置默认原文写入用�
 /**
  * 文件宠物条目的基座 —— 「全局默认 + 种类可覆盖」。
  *
- * 判据：GLOBAL_DEFAULT_KEYS 那 9 个（physics / confineToScreen / 两个配图开关 / chatImageLimit /
+ * 判据：GLOBAL_DEFAULT_KEYS 那 11 个（physics / confineToScreen / hideOnFullscreen / 两个配图开关 / chatImageLimit /
  * chatMemoryRounds / whisperModel / chatModel / eventsRefreshSec）是**用户级「成本 / 偏好 /
  * 环境 / 节奏」参数**，用户层写了就对**所有条目**生效（含 pet pack）；种类文件自己写了就覆盖
  * 自己那份。其余顶层字段（人设 / 表情包 / 动画池 / 文案）的基座仍是**内置默认**——
@@ -830,7 +899,7 @@ describe('文件宠物条目 —— 全局默认（用户层作基座）+ 种类
     }
   }
 
-  test('用户层写了这 9 个字段 → 种类条目逐个继承（不再只吃内置默认）', () => {
+  test('用户层写了这 11 个字段 → 种类条目逐个继承（不再只吃内置默认）', () => {
     const out = merged({
       overlay: {
         physics: { ...(BASE_FULL.physics as Record<string, unknown>), petCollision: true, gravity: 999 },
