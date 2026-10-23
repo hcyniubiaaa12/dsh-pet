@@ -68,6 +68,66 @@ const { buildDeskGeometry } = require('./desktop-geometry.js');
 const { probeSpawnCommand } = require('./probe-command.js');
 // 单实例唤回：宿主经 bridge 回调通道反向 POST /control，这里解析动作并唤回全部宠物窗口
 const { parseControlRequest, focusAllWindows } = require('./control-request.js');
+// 日志落盘（工单 00）：目录/文件名口径、打码、滚动与失败静默都是纯逻辑（有单测），这里只接线
+const { resolveDshHome, logDirOf, createFileAppender } = require('./helper-log.js');
+
+// ---------- 日志落盘（工单 00）----------
+//
+// 【为什么】插件形态下本进程的 stdout 被宿主读走后走 logger.debug（默认不显示）；打包/独立形态
+// 启动后没有任何日志文件——「判定模块算出了什么」「隐藏为什么没触发」「托盘点击有没有写成功」
+// 只能靠重跑进程复现。落盘后这些事后都能读到：`<DSH_HOME>/dsh-pet/logs/helper-<YYYYMMDD>.log`。
+//
+// 【怎么做】console 接管是**包装不是替换**：先把原实现存下来，接管后的每个方法都先走原实现
+// （stdout/stderr 照旧，宿主的 debug 通道与手动 start-desktop 的终端输出都不变），再经 appender
+// 追加写文件。写盘的所有失败（目录建不出/磁盘满/权限不足）都在 helper-log.js 里静默吞掉——
+// 这里**绝不**在写日志路径上打 console（既会递归又会刷屏），大不了丢日志，绝不能崩。
+//
+// 【DPI_PROBE】探测子进程是一次性短命进程（只把 scaleFactor 打到 stdout 就退出，父进程按
+// DPI_MARK 抓值），既不建窗口也不需要日志——必须在接管 console 之前短路返回，让它保持原样。
+//
+// 【敏感信息】DSH_PET_SITE_URL 的值（已鉴权站点 URL）整串打码；URL 查询串里的 token 类参数
+// （configUrl / settingsUrl 都带一次性 token）由 helper-log 的 redact 统一打掉，延续现有
+// 「这些值不进日志」的注释约定。
+/** DPI 探测子进程模式：不建窗口，只把主屏 scaleFactor 打到 stdout 就退出（见 probePrimaryScale） */
+const DPI_PROBE = process.env.DSH_PET_DPI_PROBE === '1';
+
+/** 已放弃写文件时不重复进入（appender.disabled 是稳定值，这里只做守卫式的短路） */
+function createHelperLogger() {
+  if (DPI_PROBE) return null;
+  const siteUrl = process.env.DSH_PET_SITE_URL;
+  const hide = typeof siteUrl === 'string' && siteUrl ? [siteUrl] : [];
+  const appender = createFileAppender({ dir: logDirOf(resolveDshHome(process.env)), hide });
+  /** 接管前先存原实现：包装永远是「原实现 + 追加写盘」，不是替换 */
+  const origConsole = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    debug: console.debug.bind(console),
+  };
+  /** 把参数序列化成一行文本（Error 取 stack 首行，对象 JSON 化，兜底 String） */
+  const format = (args) =>
+    args
+      .map((a) => {
+        if (typeof a === 'string') return a;
+        if (a instanceof Error) return a.stack || a.message;
+        try {
+          return JSON.stringify(a);
+        } catch {
+          return String(a);
+        }
+      })
+      .join(' ');
+  for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+    console[level] = (...args) => {
+      origConsole[level](...args);
+      // 写盘失败在 appender 内部静默吞掉；这里连 disabled 都不判断也不会刷屏
+      void appender.write(level, format(args));
+    };
+  }
+  return { appender, origConsole };
+}
+const helperLogger = createHelperLogger();
 
 // ---------- AI 设置入口（ticket 07）----------
 //
@@ -143,8 +203,6 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // 我们的 DPI 缓存与 Chromium profile 都会和别人混在一起。必须赶在任何 getPath('userData') 之前设。
 app.setName('dsh-pet-electron-helper');
 
-/** DPI 探测子进程模式：不建窗口，只把主屏 scaleFactor 打到 stdout 就退出（见 probePrimaryScale） */
-const DPI_PROBE = process.env.DSH_PET_DPI_PROBE === '1';
 /** 探测进程的输出标记（父进程按它抓值） */
 const DPI_MARK = 'dsh-pet-primary-scale:';
 
@@ -1067,6 +1125,15 @@ app.whenReady().then(() => {
   // 缺失/过期/损坏时弹可读提示，绝不打开空白页；绝不把 URL/token 写进日志。
   ipcMain.on('pet:open-settings', () => {
     void openAiSettings();
+  });
+
+  // 渲染端 console 转发（preload 一次性接管注入，工单 00）：渲染端的现场与主进程日志落进
+  // 同一份文件。文本进 appender 前同样过打码（渲染端也可能打出 configUrl）；写盘失败在
+  // appender 内部静默，绝不在这里回打 console（防递归/刷屏）。payload 损坏就丢弃。
+  ipcMain.on('pet:renderer-log', (event, payload) => {
+    const level = payload && typeof payload === 'object' && typeof payload.level === 'string' ? payload.level : 'log';
+    const text = payload && typeof payload === 'object' ? String(payload.text ?? '') : '';
+    if (helperLogger) void helperLogger.appender.write('[renderer] ' + level, text);
   });
 
   // 显示器热更新：分辨率/缩放变化、插拔屏、旋转都会让桌面几何失效。原先几何只在

@@ -21,6 +21,69 @@
 //       onPetHit：订阅「你被撞了」→ 用新初速 startThrow 抛出去（与浏览器 onHit 同语义）。
 const { contextBridge, ipcRenderer } = require('electron');
 
+// ---- 渲染端 console 一次性接管（工单 00）----
+//
+// 页面里的 console 不会进主进程，桌面壳又没有常开的 DevTools——「配置为什么加载失败」「宠物
+// 为什么没渲染」这些渲染端现场只能经这条通道进主进程、和主进程日志落进同一份文件。
+//
+// 接管必须在**这里**做一次（业务代码里不逐处埋点，见 helper-log.test.ts 的守卫）：preload 与
+// 页面隔离（contextIsolation），但 webFrame.executeJavaScript 注入的脚本跑在页面的 main world，
+// 能摸到页面真实的 console。注入代码（INJECT）在 main world 里执行——那里没有 require/node，
+// 只能经 contextBridge 暴露的 petLogForward（见文件尾）把文本送回 preload 侧再发主进程；
+// 包装同样是「原实现 + 转发」，页面 console 本身的输出不变，且转发过程绝不抛错。
+const INJECT = `(function () {
+  if (window.__dshPetConsoleTaken) return;
+  window.__dshPetConsoleTaken = true;
+  var levels = ['log', 'info', 'warn', 'error', 'debug'];
+  var orig = {};
+  for (var i = 0; i < levels.length; i++) orig[levels[i]] = console[levels[i]].bind(console);
+  function text(args) {
+    var out = [];
+    for (var j = 0; j < args.length; j++) {
+      var a = args[j];
+      try {
+        out.push(typeof a === 'string' ? a : a instanceof Error ? (a.stack || a.message) : JSON.stringify(a));
+      } catch (e) {
+        out.push(String(a));
+      }
+    }
+    return out.join(' ');
+  }
+  for (var k = 0; k < levels.length; k++) {
+    (function (level) {
+      console[level] = function () {
+        orig[level].apply(null, arguments);
+        try {
+          // petLogForward 由 contextBridge 暴露（见下）；转发失败静默，页面 console 绝不因日志抛错
+          if (window.petLogForward) window.petLogForward.forwardLog(level, text(arguments));
+        } catch (e) {
+          /* 静默 */
+        }
+      };
+    })(levels[k]);
+  }
+})();`;
+try {
+  require('electron')
+    .webFrame.executeJavaScript(INJECT)
+    .catch(() => {
+      /* 注入失败（时序/环境）：渲染端日志进不了文件，但不影响页面运行 */
+    });
+} catch {
+  /* 同上，静默 */
+}
+// 渲染端转发入口：注入代码（main world）经 contextBridge 暴露的 forwardLog 回到 preload 侧，
+// 再由 ipcRenderer.send 发往主进程。send 是 fire-and-forget，永不阻塞页面。
+contextBridge.exposeInMainWorld('petLogForward', {
+  forwardLog(level, text) {
+    try {
+      ipcRenderer.send('pet:renderer-log', { level: String(level), text: String(text) });
+    } catch {
+      /* 静默：转发绝不能影响页面 */
+    }
+  },
+});
+
 contextBridge.exposeInMainWorld('petBridge', {
   setBounds(x, y, width, height, boxX, boxY, size, bottomPad, vx, vy, marginL, marginT) {
     ipcRenderer.send('pet:set-bounds', {
