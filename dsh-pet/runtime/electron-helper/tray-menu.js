@@ -28,6 +28,7 @@ function isDesktopDisplay(display) {
  *   pets: 配置里全部宠物（含 display 为 web/none 的——托盘是它们回到桌面的唯一入口）
  *   settingsUrl: 独立模式写出的 AI 设置页 URL；没有时不出该项（ticket 07）
  *   autostart: 当前系统登录项状态（ticket 09）
+ *   hideOnFullscreen: 全屏应用时隐藏桌宠的全局开关（ticket 09）；缺省视为 true（配置内置默认）
  * @returns {Array<Record<string, unknown>>} Electron Menu.buildFromTemplate 兼容的模板数组
  */
 function buildTrayMenuTemplate(input = {}) {
@@ -65,6 +66,14 @@ function buildTrayMenuTemplate(input = {}) {
   }
 
   template.push(
+    {
+      id: 'hide-on-fullscreen',
+      action: 'toggle-hide-on-fullscreen',
+      type: 'checkbox',
+      label: '全屏应用时隐藏桌宠',
+      // 配置缺省时按内置默认（开启）勾上——这是全局默认组的 hideOnFullscreen（ticket 07/09）
+      checked: input.hideOnFullscreen !== false,
+    },
     {
       id: 'autostart',
       action: 'toggle-autostart',

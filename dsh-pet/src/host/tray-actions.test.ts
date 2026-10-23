@@ -105,6 +105,21 @@ describe('dispatchTrayAction —— 模板项到副作用描述', () => {
     });
   });
 
+  test('toggle-hide-on-fullscreen：翻转配置状态（缺省按配置默认 true 处理）', () => {
+    assert.deepEqual(dispatchTrayAction({ action: 'toggle-hide-on-fullscreen' }, { hideOnFullscreen: true }), {
+      type: 'set-hide-on-fullscreen',
+      enabled: false,
+    });
+    assert.deepEqual(dispatchTrayAction({ action: 'toggle-hide-on-fullscreen' }, { hideOnFullscreen: false }), {
+      type: 'set-hide-on-fullscreen',
+      enabled: true,
+    });
+    assert.deepEqual(dispatchTrayAction({ action: 'toggle-hide-on-fullscreen' }, {}), {
+      type: 'set-hide-on-fullscreen',
+      enabled: false,
+    });
+  });
+
   test('open-data-dir / show-help / quit 各自映射到明确动作', () => {
     assert.deepEqual(dispatchTrayAction({ action: 'open-data-dir' }, {}), { type: 'open-data-dir' });
     assert.deepEqual(dispatchTrayAction({ action: 'show-help' }, {}), { type: 'show-help' });
@@ -168,6 +183,7 @@ describe('trayMenuScenario → buildTrayMenuTemplate —— 宿主托盘的完�
       },
       settingsUrl: 'http://127.0.0.1:3080/standalone-ai/#token=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG',
       autostart: true,
+      hideOnFullscreen: true,
     });
     const template: MenuItem[] = buildTrayMenuTemplate(scenario);
 
@@ -182,6 +198,11 @@ describe('trayMenuScenario → buildTrayMenuTemplate —— 宿主托盘的完�
     const settings = template.find((item) => item.action === 'open-settings');
     assert.equal(settings?.url, scenario.settingsUrl);
     assert.equal(template.find((item) => item.action === 'toggle-autostart')?.checked, true);
+    assert.equal(
+      template.find((item) => item.action === 'toggle-hide-on-fullscreen')?.checked,
+      true,
+      '全屏隐藏勾选态随 scenario 配置值',
+    );
     assert.ok(template.find((item) => item.action === 'open-data-dir'));
     assert.ok(template.find((item) => item.action === 'show-help'));
     assert.ok(template.find((item) => item.action === 'quit'));
@@ -214,6 +235,19 @@ describe('trayMenuScenario → buildTrayMenuTemplate —— 宿主托盘的完�
 describe('路径 —— 托盘图标来自应用根', () => {
   test('图标路径可预测（打包后 appPath 是 asar 根）', () => {
     assert.equal(trayIconPath('/opt/dsh-pet'), join('/opt/dsh-pet', 'assets', 'logo.png'));
+  });
+});
+
+describe('TrayEffect —— 全屏隐藏开关只写配置，绝不重启桌面壳（ticket 09）', () => {
+  test('副作用联合里没有「重启桌面壳」成员；set-hide-on-fullscreen 是纯写配置动作', async () => {
+    const effect = dispatchTrayAction({ action: 'toggle-hide-on-fullscreen' }, { hideOnFullscreen: false });
+    assert.equal(effect.type, 'set-hide-on-fullscreen');
+    // 源码守卫：tray-actions.ts 的 TrayEffect 联合不含任何 restart/reload 类型
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('./tray-actions.ts', import.meta.url), 'utf8');
+    const union = /export type TrayEffect =[\s\S]*?;\n/.exec(src)?.[0] ?? '';
+    assert.ok(union.includes("'set-hide-on-fullscreen'"), '联合里必须有 set-hide-on-fullscreen');
+    assert.ok(!/restart|relaunch/.test(union), '托盘动作不得产生重启桌面壳的副作用');
   });
 });
 

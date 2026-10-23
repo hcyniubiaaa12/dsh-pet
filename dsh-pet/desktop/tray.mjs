@@ -30,6 +30,8 @@ const { trayPlatform } = require('../runtime/electron-helper/tray-platform.js');
 
 const CONFIG_PATH = '/dsh-pet-7340/config';
 const PET_DISPLAY_PATH = '/dsh-pet-7340/pet-display';
+/** 托盘「全屏应用时隐藏桌宠」开关的写配置入口（ticket 09）：只写 hideOnFullscreen，不重启桌面壳 */
+const HIDE_ON_FULLSCREEN_PATH = '/dsh-pet-7340/hide-on-fullscreen';
 /** 配置变化（settings 页/右键菜单/其它实例）的收敛周期；点勾选后会立即强制刷新一次 */
 const DEFAULT_POLL_MS = 1000;
 
@@ -122,6 +124,7 @@ export async function startAppTray(options = {}) {
     config: undefined,
     settingsUrl: await currentSettingsUrl(home),
     autostart: readAutostart(loginItem),
+    hideOnFullscreen: true,
   };
   let template = [];
   let menu = null;
@@ -212,6 +215,11 @@ export async function startAppTray(options = {}) {
       }
       state.config = config;
       state.autostart = readAutostart(loginItem);
+      // 全屏隐藏开关是全局默认组字段：取 main 条目顶层值（成品聚合已合并内置默认，必有布尔）
+      state.hideOnFullscreen =
+        state.config && state.config.main && typeof state.config.main.hideOnFullscreen === 'boolean'
+          ? state.config.main.hideOnFullscreen
+          : true;
       // 运行时文件可能被宿主收尾删除/重写：设置项跟着出现/消失，避免留着一个点了报错的入口
       state.settingsUrl = await currentSettingsUrl(home);
       const signature = JSON.stringify(trayMenuScenario(state));
@@ -240,7 +248,7 @@ export async function startAppTray(options = {}) {
 
   /** 把纯函数的副作用描述翻译成 Electron 调用 */
   async function runAction(item) {
-    const effect = dispatchTrayAction(item, { autostart: state.autostart });
+    const effect = dispatchTrayAction(item, { autostart: state.autostart, hideOnFullscreen: state.hideOnFullscreen });
     switch (effect.type) {
       case 'pet-display':
         await hostRequest(handle, 'POST', PET_DISPLAY_PATH, { id: effect.id, display: effect.display });
@@ -270,6 +278,12 @@ export async function startAppTray(options = {}) {
       case 'set-autostart':
         writeAutostart(loginItem, effect.enabled);
         state.autostart = readAutostart(loginItem);
+        rebuild();
+        break;
+      case 'set-hide-on-fullscreen':
+        // 只写配置：响应成功即本地乐观翻勾（1s 轮询随后会从盘上对齐）；绝不重启桌面壳
+        await hostRequest(handle, 'POST', HIDE_ON_FULLSCREEN_PATH, { enabled: effect.enabled });
+        state.hideOnFullscreen = effect.enabled;
         rebuild();
         break;
       case 'open-data-dir': {

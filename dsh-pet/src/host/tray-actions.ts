@@ -19,6 +19,8 @@ export interface TrayActionItem {
 /** 点击时需要的应用状态（自启状态以系统登录项为准，不另存配置） */
 export interface TrayActionState {
   autostart?: boolean;
+  /** 全屏应用时隐藏桌宠（全局配置 hideOnFullscreen；缺省按内置默认 true 处理） */
+  hideOnFullscreen?: boolean;
 }
 
 /** 托盘只需要的宠物字段（与壳的 startTray 同一口径） */
@@ -33,6 +35,8 @@ export interface TrayMenuScenario {
   pets: TrayMenuPet[];
   settingsUrl?: string;
   autostart: boolean;
+  /** 全屏应用时隐藏桌宠（全局配置；缺省 true = 配置内置默认） */
+  hideOnFullscreen: boolean;
 }
 
 /**
@@ -67,12 +71,15 @@ export function trayMenuScenario(input: {
   config?: unknown;
   settingsUrl?: string;
   autostart?: boolean;
+  hideOnFullscreen?: boolean;
 }): TrayMenuScenario {
   const settingsUrl = String(input.settingsUrl ?? '').trim();
   return {
     pets: flattenConfigPets(input.config),
     ...(settingsUrl ? { settingsUrl } : {}),
     autostart: Boolean(input.autostart),
+    // 缺省视为 true：与模板/内置默认的「全屏时隐藏」一致
+    hideOnFullscreen: input.hideOnFullscreen !== false,
   };
 }
 
@@ -80,6 +87,7 @@ export type TrayEffect =
   | { type: 'pet-display'; id: string; display: string }
   | { type: 'open-url'; url: string }
   | { type: 'set-autostart'; enabled: boolean }
+  | { type: 'set-hide-on-fullscreen'; enabled: boolean }
   | { type: 'open-data-dir' }
   | { type: 'show-help' }
   | { type: 'quit' }
@@ -133,6 +141,9 @@ export function dispatchTrayAction(item: TrayActionItem, state: TrayActionState 
     case 'toggle-autostart':
       // 以当前系统登录项状态为准翻转，而不是信菜单里可能过期的勾选态
       return { type: 'set-autostart', enabled: !state.autostart };
+    case 'toggle-hide-on-fullscreen':
+      // 只写配置，不重启桌面壳（隐藏机制由桌面壳轮询配置自管）；缺省按内置默认 true 翻转
+      return { type: 'set-hide-on-fullscreen', enabled: !(state.hideOnFullscreen ?? true) };
     case 'open-data-dir':
       return { type: 'open-data-dir' };
     case 'show-help':

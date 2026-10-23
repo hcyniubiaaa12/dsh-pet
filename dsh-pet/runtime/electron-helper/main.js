@@ -851,6 +851,16 @@ function traySetPetDisplay(id, display) {
   });
 }
 
+/**
+ * 写「全屏应用时隐藏桌宠」开关（ticket 09）：宿主路由只落盘、**不重启本进程**，响应能正常回来；
+ * 勾选态由点击方本地乐观更新（rebuildTrayMenu），走默认轮询/下次打开菜单即与盘上一致。
+ */
+function traySetHideOnFullscreen(enabled) {
+  hostRequest('POST', PET_ROUTE + '/hide-on-fullscreen', JSON.stringify({ enabled })).catch((e) => {
+    console.error('[dsh-pet-desktop-helper] tray hide-on-fullscreen failed:', String(e && e.message ? e.message : e));
+  });
+}
+
 /** 托盘图标：包内 logo 缩到 16×16（macOS 要模板图，否则深色菜单栏下看不见） */
 function trayIcon() {
   const file = path.join(__dirname, '..', '..', 'assets', 'logo.png');
@@ -868,8 +878,12 @@ function trayIcon() {
 /**
  * 建托盘：列出**配置里全部**宠物（含 display 为 web/none 的——它们当前不在桌面上、勾是空的，
  * 点一下就能送回来，这是托盘相对宠物右键菜单的增量）。勾 = 当前 display 含 desktop/both。
+ * 另带「全屏应用时隐藏桌宠」开关（ticket 09）：点击只写配置、本地翻勾，不重启本进程——
+ * 菜单是静态的，用 Menu.buildFromTemplate 重建一次把新勾选态顶上去。
  */
 async function startTray() {
+  // 全局开关的本地勾选态（乐观更新）：初值在配置拉下来之前按内置默认 true
+  let hideOnFullscreen = true;
   try {
     // 请求行要携带回调 URL，而端口在 startBridgeCallback 的 listen 回调里才有值（最多等 2s）
     for (let i = 0; BRIDGE && !bridgeCallbackUrl && i < 100; i += 1) {
@@ -891,21 +905,42 @@ async function startTray() {
       }))
       .filter((pet) => pet.id);
     if (!pets.length) return; // 配置里没有任何宠物：没有可切换的对象，不建托盘
-    // 模板由纯函数产出（ticket 01）。当前只接宠物勾选；AI 设置 / 开机自启 / 数据目录 / 说明 / 退出
-    // 是模板里已有的应用项，留给后续 ticket 接线。视觉与行为必须与抽出前完全一致：
-    // 同样的 label、勾选态与点击翻转方向。
-    const petItems = buildTrayMenuTemplate({ pets })
-      .filter((item) => item.action === 'toggle-pet')
-      .map((item) => ({
-        id: item.id,
-        label: item.label,
-        type: item.type,
-        checked: item.checked,
-        click: () => traySetPetDisplay(item.petId, toggleDisplay(item.display)),
-      }));
+    // 全局开关初值取 main 条目顶层（成品聚合已合并内置默认；缺了按 true）
+    if (merged.main && typeof merged.main.hideOnFullscreen === 'boolean') {
+      hideOnFullscreen = merged.main.hideOnFullscreen;
+    }
+    // 模板由纯函数产出（ticket 01）。当前接宠物勾选 + 全屏隐藏开关（ticket 09）；AI 设置 /
+    // 开机自启 / 数据目录 / 说明 / 退出仍是模板里已有的应用项，留给后续 ticket 接线。
+    // 视觉与行为必须与抽出前完全一致：同样的 label、勾选态与点击翻转方向。
+    const buildTemplate = () =>
+      buildTrayMenuTemplate({ pets, hideOnFullscreen })
+        .filter((item) => item.action === 'toggle-pet' || item.action === 'toggle-hide-on-fullscreen')
+        .map((item) => {
+          if (item.action === 'toggle-pet') {
+            return {
+              id: item.id,
+              label: item.label,
+              type: item.type,
+              checked: item.checked,
+              click: () => traySetPetDisplay(item.petId, toggleDisplay(item.display)),
+            };
+          }
+          return {
+            id: item.id,
+            label: item.label,
+            type: item.type,
+            checked: item.checked,
+            click: () => {
+              hideOnFullscreen = !item.checked; // 乐观翻勾，不重启进程
+              traySetHideOnFullscreen(hideOnFullscreen);
+              rebuildTrayMenu();
+            },
+          };
+        });
+    const rebuildTrayMenu = () => tray.setContextMenu(Menu.buildFromTemplate(buildTemplate()));
     tray = new Tray(trayIcon());
     tray.setToolTip('dsh-pet 桌面宠物');
-    tray.setContextMenu(Menu.buildFromTemplate(petItems));
+    rebuildTrayMenu();
     // Windows 上 setContextMenu 只接管右键，左键默认什么都不做（macOS 相反：左键即弹菜单）
     if (TRAY_PLATFORM.leftClickPopsMenu) tray.on('click', () => tray.popUpContextMenu());
   } catch (e) {

@@ -23,6 +23,8 @@
  *   /dsh-pet-7340/reload              → 桌面端「重载配置」（右键菜单，POST）：重启桌面 Helper，全部桌面
  *                                宠物窗口按最新配置重建（改配置文件后不必回设置页点保存）；与保存走
  *                                **同一条**重启路径（syncDesktop），宠物数量/display/size 变化同样生效
+ *   /dsh-pet-7340/hide-on-fullscreen → 托盘「全屏应用时隐藏桌宠」开关（POST，ticket 09）：只写
+ *                                用户主配置的 hideOnFullscreen，**不**重启桌面壳（点击方自持乐观勾选态）
  *   /dsh-pet-7340/config/meta         → 配置文件与素材目录路径 + 全部存储位置清单
  *                                       （设置页「高级配置」「卸载与存储」展示用）
  *   /dsh-pet-7340/models              → 可选「服务商 + 模型」清单（设置页「AI 模型」下拉框数据源；
@@ -1276,6 +1278,54 @@ export function apply(ctx: any): void {
       // 直接把它交给 petBridge.reload，不必再发一次 GET /config —— 与设置页保存走的是同一条路，
       // 也就不会拿到可能陈旧的配置（现场表现：不返回聚合时浏览器端要刷新才生效）。
       return { kind: 'json', status: 200, obj: readAllConfig(configPaths) };
+    }
+
+    // 全屏应用时隐藏桌宠（托盘开关，POST /hide-on-fullscreen，ticket 09）：
+    // 与 /pet-display 同一套「最小写入口」思路——只收一个布尔，不要求调用方回传整段 pets。
+    // 与 /pet-display 的关键差异：**不重启桌面壳**。本开关只影响壳自身的全屏隐藏行为，
+    // 为它重建全部宠物窗口会让宠物闪一下、位置重置；壳读配置走自己的通道，落盘后自然跟上。
+    // 层归属固定 main（hideOnFullscreen 是全局默认组字段，写在用户主配置），saveUserConfig
+    // 负责白名单校验 + existing 透传，手改的 whisperPrompt 等高级字段不会被抹掉。
+    if (rest === 'hide-on-fullscreen') {
+      if (method !== 'POST') return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      // 与 /pet-display 同口径：业务失败一律 200 + ok:false，只有 405/400 是协议层错误
+      const fail = (reason: string, message: string): RouteResult => ({
+        kind: 'json',
+        status: 200,
+        obj: { ok: false, reason, message },
+      });
+      let payload: { enabled?: unknown };
+      try {
+        payload = JSON.parse(body ?? '') as { enabled?: unknown };
+      } catch {
+        return { kind: 'json', status: 400, obj: { error: 'invalid JSON body' } };
+      }
+      if (typeof payload.enabled !== 'boolean') {
+        return fail('bad-request', 'enabled 必须是布尔：true = 全屏应用时隐藏桌宠');
+      }
+      // pets 必须带上 main 层全部宠物（saveUserConfig 是整段替换语义，漏掉 = 把它们删掉），
+      // 从成品聚合反查——托盘本来就持有这份聚合，回传成本最低；层归属固定 main（全局字段）。
+      let merged: Record<string, Record<string, unknown>>;
+      try {
+        merged = readAllConfig(configPaths);
+      } catch (e) {
+        return fail('generate-error', e instanceof Error ? e.message : String(e));
+      }
+      const mainPets = Array.isArray(merged.main?.pets)
+        ? (merged.main.pets as Record<string, unknown>[]).map((p) => ({ ...p }))
+        : [];
+      const existing = readUserConfig(configPaths);
+      const clean = saveUserConfig({ pets: mainPets, hideOnFullscreen: payload.enabled }, existing);
+      if (!clean) return fail('bad-request', '宠物配置非法');
+      try {
+        await mkdir(userRoot, { recursive: true });
+        await writeFile(userConfigPath, JSON.stringify(clean, null, 2), 'utf8');
+      } catch (e) {
+        return fail('generate-error', e instanceof Error ? e.message : String(e));
+      }
+      // 有意**不**写 sections.config、**不** syncDesktop：托盘点击方自持乐观勾选态，
+      // 桌面壳下一次读配置即生效；打包形态宿主托盘还有 1s 轮询自然对齐。
+      return { kind: 'json', status: 200, obj: { ok: true, enabled: payload.enabled } };
     }
 
     // 桌面端「重载配置」（右键菜单 → POST /reload）：重启桌面 Helper，全部桌面宠物窗口按最新配置重建。
