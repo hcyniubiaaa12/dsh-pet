@@ -141,4 +141,15 @@ export default tseslint.config(
       globals: { ...nodeGlobals, ...browserGlobals },
     },
   },
+  {
+    // 诊断脚本：独立 CJS 工具（全屏判定探测），Node 环境，不进 npm test
+    files: ['tools/**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { ...nodeGlobals, require: 'readonly', module: 'writable', exports: 'writable' },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 );
