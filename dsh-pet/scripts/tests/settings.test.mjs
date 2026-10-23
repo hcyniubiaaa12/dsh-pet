@@ -23,6 +23,7 @@ const defaults = {
     whisperImageEnabled: false,
     chatImageEnabled: false,
     confineToScreen: false,
+    hideOnFullscreen: true,
     physics: {
       gravity: 2400,
       restitution: 0.6,
@@ -44,6 +45,7 @@ const customized = {
     whisperImageEnabled: true,
     chatImageEnabled: true,
     confineToScreen: true,
+    hideOnFullscreen: false,
     chatMemoryRounds: 19,
     chatImageLimit: 2,
     whisperModel: { provider: 'test', model: 'model' },
@@ -80,8 +82,12 @@ after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
 });
 
-async function open(t, { get = customized, viewport = { width: 900, height: 900 }, lang = 'en' } = {}) {
+async function open(
+  t,
+  { get = customized, viewport = { width: 900, height: 900 }, lang = 'en', platform = 'Win32' } = {},
+) {
   const context = await browser.newContext({ viewport });
+  await context.addInitScript((p) => Object.defineProperty(navigator, 'platform', { get: () => p }), platform);
   t.after(() => context.close());
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
@@ -208,6 +214,32 @@ for (const lang of ['en', 'zh']) {
     });
   }
 }
+
+test('hideOnFullscreen toggle reflects config, submits on save, and disables off-Windows', async (t) => {
+  // 非 Windows（fixture 覆盖 navigator.platform）：开关在、置灰、附「仅 Windows」说明——不隐藏
+  {
+    const { page } = await open(t, { viewport: { width: 900, height: 900 }, lang: 'zh', platform: 'MacIntel' });
+    const cell = page.locator('.dsh-pet-cfg__toggle').filter({ hasText: '全屏时隐藏' });
+    const box = cell.locator('input[type=checkbox]');
+    await box.waitFor();
+    assert.equal(await box.isDisabled(), true);
+    assert.match((await cell.locator('[data-tip]').getAttribute('data-tip')) ?? '', /仅 Windows/);
+  }
+  // Windows：回显按配置值勾选，取消勾选保存后请求体带上该字段
+  const { page, writes } = await open(t, { viewport: { width: 900, height: 900 }, lang: 'zh' });
+  const box = page.locator('.dsh-pet-cfg__toggle').filter({ hasText: '全屏时隐藏' }).locator('input[type=checkbox]');
+  await box.waitFor();
+  assert.equal(await box.isChecked(), false, 'customized.main.hideOnFullscreen=false 应回显为不勾选');
+  assert.equal(await box.isDisabled(), false);
+  await box.click();
+  // 用宠物卡上的就近保存（页面底部主保存按钮有两个同名实例，strict mode 会拦既有用例——那是另一码事）
+  await Promise.all([
+    page.waitForResponse((r) => r.request().method() === 'PUT'),
+    page.locator('.dsh-pet-cfg__btn.is-sm', { hasText: '保存' }).click(),
+  ]);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].hideOnFullscreen, true);
+});
 
 test('model picker remains anchored while the responsive settings panel is scrolled', async (t) => {
   const { page, writes } = await open(t, { viewport: { width: 900, height: 700 } });

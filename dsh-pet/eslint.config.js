@@ -35,6 +35,8 @@ const browserGlobals = {
   location: 'readonly',
   innerWidth: 'readonly',
   innerHeight: 'readonly',
+  // settings.test.mjs 的 addInitScript 回调在浏览器里改写 navigator.platform
+  navigator: 'readonly',
   // 桌面壳的经典 script 顶层 const（runtime/electron-helper/constants.js），
   // page.evaluate() 里可直接引用——这是渲染页的真实全局，不是测试笔误。
   CONFIG: 'readonly',

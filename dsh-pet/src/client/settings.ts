@@ -101,10 +101,12 @@ const SETTINGS_CSS = [
   // 栅格：列数固定 → 行与行的控件自然对齐成一列
   '.dsh-pet-cfg__grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 16px;align-items:end}',
   '.dsh-pet-cfg__grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 16px;align-items:end}',
+  // 五格栅格：全局开关卡用（第五项 = 全屏时隐藏；其余卡仍是三 / 四格，不加会挤）
+  '.dsh-pet-cfg__grid5{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px 16px;align-items:end}',
   '.dsh-pet-cfg__grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;align-items:end}',
 
-  '@container (max-width:600px){.dsh-pet-cfg__grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}',
-  '@container (max-width:400px){.dsh-pet-cfg__grid2,.dsh-pet-cfg__grid3,.dsh-pet-cfg__grid4{grid-template-columns:minmax(0,1fr)}}',
+  '@container (max-width:600px){.dsh-pet-cfg__grid4,.dsh-pet-cfg__grid5{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+  '@container (max-width:400px){.dsh-pet-cfg__grid2,.dsh-pet-cfg__grid3,.dsh-pet-cfg__grid4,.dsh-pet-cfg__grid5{grid-template-columns:minmax(0,1fr)}}',
 
   // 字段：标签（+ 问号）在上、控件在下
   '.dsh-pet-cfg__field{display:flex;flex-direction:column;gap:4px;min-width:0}',
@@ -276,6 +278,8 @@ export const zh = {
   confineToggle: '锁定在当前屏幕',
   confineToggleHint:
     '多屏用户：开了之后宠物只在当前所在那块屏幕内活动——甩出去的宠物只在松手时所在那块屏内弹（屏缝当墙，不飞到隔壁屏），自主漫游也只在当前所在那块屏内走（越出屏缝的那一步直接取消）。关掉则照常跨屏飞行 / 跨屏行走。只影响桌面模式——浏览器 overlay 本来就只在视口内活动。',
+  hideToggle: '全屏时隐藏',
+  hideToggleHint: '全屏应用或全屏视频时暂时藏起宠物，退出全屏自动回来。仅 Windows 生效。',
   physicsTitle: '物理（拖拽抛掷手感）',
   physicsHint:
     '全局默认，所有宠物共用（pet pack 可在自己种类文件里单独覆盖）；随「保存」写入用户配置（不做即时写入）。浏览器保存后即时生效，桌面端由保存重载宠物窗口后生效。',
@@ -452,6 +456,9 @@ export const en = {
   confineToggle: 'Lock to the current screen',
   confineToggleHint:
     'Multi-monitor: when on, the pet stays inside the screen it is currently on — a thrown pet bounces only inside the screen it was released on (screen seams act as walls, so it never flies to the neighbouring monitor), and autonomous wandering only walks within the screen it is currently on (a step that would cross the seam is simply cancelled). Turn this off to let it cross screens as usual. Desktop only — the browser overlay always stays inside the viewport anyway.',
+  hideToggle: 'Hide on fullscreen',
+  hideToggleHint:
+    'Hides the pet while a fullscreen app or video plays; it comes back once fullscreen exits. Windows only.',
   physicsTitle: 'Physics (drag & throw feel)',
   physicsHint:
     'Global default, shared by every pet (a pet pack may override it in its own kind file); written to the user config on "Save" (never written immediately). Applies instantly in the browser; on the desktop it applies once Save reloads the pet windows.',
@@ -1003,8 +1010,14 @@ export function makePetConfigSection(rt: {
     // 表情包配图开关（全局：写用户级配置；与「保存」一起提交，不做即时写入）
     const [whisperImage, setWhisperImage] = useState(false);
     const [chatImage, setChatImage] = useState(false);
+    // 全屏隐藏开关只对 Windows 生效（宿主探测走 DWM，仅 Windows 有）：非 Windows 下置灰不隐藏。
+    // 设置页本身没有宿主传入的平台字段，走浏览器自带的 navigator.platform（渲染端唯一现成来源）。
+    const isWindows = /win/i.test(navigator.platform);
     // 抛掷锁定开关（全局：写用户级配置；与「保存」一起提交，不做即时写入）
     const [confineScreen, setConfineScreen] = useState(false);
+    // 全屏隐藏开关（全局：写用户级配置 hideOnFullscreen；与「保存」一起提交，不做即时写入）。
+    // 默认 true = 内置默认（assets/config.jsonc），加载效应会用成品 main.hideOnFullscreen 覆盖。
+    const [hideFullscreen, setHideFullscreen] = useState(true);
     // 物理参数（全局：拖拽抛掷手感，写用户级配置 main-config.jsonc 的 physics 段）。
     // 与四个开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
     // 初值仅作占位；成品配置加载成功后才允许编辑和保存。
@@ -1042,6 +1055,7 @@ export function makePetConfigSection(rt: {
       if (typeof m.whisperImageEnabled === 'boolean') setWhisperImage(m.whisperImageEnabled);
       if (typeof m.chatImageEnabled === 'boolean') setChatImage(m.chatImageEnabled);
       if (typeof m.confineToScreen === 'boolean') setConfineScreen(m.confineToScreen);
+      if (typeof m.hideOnFullscreen === 'boolean') setHideFullscreen(m.hideOnFullscreen);
       // physics 段：成品已按「内置默认 ← 用户层」整段填满，直接取用（缺子键再用默认兜底一次）
       if (m.physics && typeof m.physics === 'object') {
         setPhysics({ ...DEFAULT_PHYSICS, ...(m.physics as PhysicsParams) });
@@ -1236,6 +1250,8 @@ export function makePetConfigSection(rt: {
           whisperImageEnabled: whisperImage,
           chatImageEnabled: chatImage,
           confineToScreen: confineScreen,
+          // 全屏隐藏（全局默认白名单字段）：宿主侧与 confineToScreen 同一套校验语义
+          hideOnFullscreen: hideFullscreen,
           // 物理参数整段提交（白名单字段，未传即走宿主透传保留）：宿主用 physicsValid 整段校验
           physics: physics,
           // 碎碎念 / 对话的模型（条目级白名单字段，同上）：宿主用 modelSelectionValid 整段校验，
@@ -1634,8 +1650,8 @@ export function makePetConfigSection(rt: {
               children: t('emptyPets'),
             }),
 
-        // 全局开关卡（需求 4：四个开关一行）。
-        // 四个开关行为**一致**：切换只改本地状态，随「保存」整包写入用户级配置——不做即时写入
+        // 全局开关卡（需求 4：四个开关一行；工单 08 起五个一行）。
+        // 五个开关行为**一致**：切换只改本地状态，随「保存」整包写入用户级配置——不做即时写入
         // （即时写盘会触发宿主重启桌面 Helper，把全部桌面宠物窗口重建一遍）。系统通知额外在保存后
         // 由 save() 调 reloadNotifications() 让通知引擎即时重读。
         // 「测试弹窗」按钮不在这里——它是个动作，跟「保存 / 同步」同一行（见下面的操作区）。
@@ -1644,12 +1660,13 @@ export function makePetConfigSection(rt: {
           children: [
             cardHead(t('globalTitle'), t('globalHint')),
             h('div', {
-              className: 'dsh-pet-cfg__grid4',
+              className: 'dsh-pet-cfg__grid5',
               children: [
                 toggleCell('notifyToggle', notifyEnabled, busy, (v) => void toggleNotify(v)),
                 toggleCell('whisperImageToggle', whisperImage, busy, setWhisperImage),
                 toggleCell('chatImageToggle', chatImage, busy, setChatImage),
-                toggleCell('confineToggle', confineScreen, busy, setConfineScreen, true),
+                toggleCell('confineToggle', confineScreen, busy, setConfineScreen),
+                toggleCell('hideToggle', hideFullscreen, busy || !isWindows, setHideFullscreen, true),
               ],
             }),
           ],
