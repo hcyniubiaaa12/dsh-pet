@@ -1,0 +1,19 @@
+#!/bin/sh
+# 提交前跑「快检查」：typecheck + lint + format:check。
+#
+# 为什么不跑 npm test：单元测试要几秒到几十秒，且 CI（.github/workflows/check.yml）
+# 会在每次 push/PR 跑全套。提交卡住比漏检更劝退，快检查留在本地、全量留在 CI。
+#
+# 为什么放在仓库根：包根在 dsh-pet/，脚本必须 cd 过去再跑（否则 pnpm 找不到 package.json）。
+# 安装：git config core.hooksPath .githooks（见 README「开发」一节）。
+
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root/dsh-pet"
+
+echo "[pre-commit] typecheck / lint / format:check …"
+pnpm run typecheck
+pnpm run lint
+pnpm run format:check
+echo "[pre-commit] 通过"

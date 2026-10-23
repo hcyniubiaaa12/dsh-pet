@@ -283,7 +283,8 @@ function probePrimaryScale() {
     execPath: process.execPath,
     helperEntry: __filename,
   });
-  let out = '';
+  // 两条路径（正常返回 / 抛错）都会赋值，初值再多写一个空串是死赋值
+  let out;
   try {
     out = execFileSync(probe.command, probe.args, opts);
   } catch (e) {
