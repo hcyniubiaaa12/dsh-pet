@@ -50,6 +50,9 @@ importers:
       '@electron/get':
         specifier: ^5.1.0
         version: 5.1.0(supports-color@7.2.0)
+      koffi:
+        specifier: ^3.3.3
+        version: 3.3.3
       openai:
         specifier: 7.39.0
         version: 7.39.0(undici@7.30.0)(zod@4.6.7)
@@ -81,9 +84,6 @@ importers:
       js-yaml:
         specifier: ^5.4.2
         version: 5.4.2
-      koffi:
-        specifier: ^3.3.3
-        version: 3.3.3
       playwright:
         specifier: 1.63.0
         version: 1.63.0

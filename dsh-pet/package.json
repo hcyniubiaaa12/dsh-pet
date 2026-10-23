@@ -101,6 +101,7 @@
     "@electron-internal/extract-zip": "^1.0.5",
     "@electron/get": "^5.1.0",
     "openai": "7.39.0",
+    "koffi": "^3.3.3",
     "zod": "4.6.7"
   },
   "dsh": {
@@ -145,7 +146,6 @@
     "eslint": "^10.9.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "js-yaml": "^5.4.2",
-    "koffi": "^3.3.3",
     "playwright": "1.63.0",
     "prettier": "^3.9.6",
     "react": "^18.2.0",

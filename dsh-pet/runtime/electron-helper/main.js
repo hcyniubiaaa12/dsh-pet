@@ -70,6 +70,9 @@ const { probeSpawnCommand } = require('./probe-command.js');
 const { parseControlRequest, focusAllWindows } = require('./control-request.js');
 // 日志落盘（工单 00）：目录/文件名口径、打码、滚动与失败静默都是纯逻辑（有单测），这里只接线
 const { resolveDshHome, logDirOf, createFileAppender } = require('./helper-log.js');
+// 全屏判定（工单 02，只算不藏）：FFI 采样与纯判定都在模块里，这里只接线
+const { sampleFullscreen } = require('./fullscreen-sampler.js');
+const { computeFullscreenTargets } = require('./fullscreen-detect.js');
 
 // ---------- 日志落盘（工单 00）----------
 //
@@ -955,6 +958,43 @@ app.whenReady().then(() => {
   if (process.env.DSH_PET_PACKAGED !== '1') void startTray();
 
   createPetWindows();
+
+  // ---------- 全屏判定（工单 02，只算不藏）----------
+  //
+  // 【做什么】每 500ms「采样 → 判定」一次：fullscreen-sampler 取候选窗口矩形与显示器矩形
+  // （FFI，失败 fail-open 返回空），fullscreen-detect 按覆盖率 ≥ 98% + 去抖 2 轮算出目标态
+  // （哪几块屏全屏中）。**本片只算不藏**：结论只进日志，窗口显隐一行代码都不动。
+  //
+  // 【为什么独立】这是唯一新增的周期任务，不复用也不干扰指针轮询 / 置顶看门狗 / 宿主存活
+  // 探测——它们各有自己的节拍与状态，拼在一起会让任何一方的失败污染另一方。
+  //
+  // 【日志】结论变化才打一行（如 `[fullscreen] display 65537: on/off`），稳定不刷屏；
+  // 判定规则、平台边界、fail-open 语义全在两个模块里（均有单测），本文件不出现平台分支。
+  const FULLSCREEN_POLL_MS = 500;
+  /** 每块屏的去抖状态（monitor.id → {value, run}），判定模块是纯函数，状态由接线方持有 */
+  const fullscreenDebounce = new Map();
+  /** 上一次打日志的结论（monitor.id → 'on'|'off'），变化才打 */
+  const fullscreenLogged = new Map();
+  setInterval(() => {
+    try {
+      const { windows: wins, monitors } = sampleFullscreen((msg) => console.warn(msg));
+      const state = {};
+      for (const [id, s] of fullscreenDebounce) state[id] = s;
+      const { targets, nextState } = computeFullscreenTargets(wins, monitors, state);
+      fullscreenDebounce.clear();
+      for (const id of Object.keys(nextState)) fullscreenDebounce.set(id, nextState[id]);
+      for (const [id, on] of Object.entries(targets)) {
+        const tag = on ? 'on' : 'off';
+        if (fullscreenLogged.get(id) !== tag) {
+          fullscreenLogged.set(id, tag);
+          console.error(`[fullscreen] display ${id}: ${tag}`);
+        }
+      }
+    } catch (e) {
+      // 采样/判定路径上任何意外都不能影响宠物：吞掉，下一拍重来
+      console.error('[dsh-pet-desktop-helper] fullscreen poll failed:', String(e && e.message ? e.message : e));
+    }
+  }, FULLSCREEN_POLL_MS).unref?.();
 
   // 宠物窗口跟随：renderer 逐帧上报窗口内容区位置/尺寸
   ipcMain.on('pet:set-bounds', (event, bounds) => {
