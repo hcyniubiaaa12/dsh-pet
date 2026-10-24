@@ -72,7 +72,9 @@ const { parseControlRequest, focusAllWindows } = require('./control-request.js')
 const { resolveDshHome, logDirOf, createFileAppender } = require('./helper-log.js');
 // 全屏判定（工单 02，只算不藏）：FFI 采样与纯判定都在模块里，这里只接线
 const { sampleFullscreen } = require('./fullscreen-sampler.js');
-const { computeFullscreenTargets } = require('./fullscreen-detect.js');
+const { computeFullscreenTargets, snapshotCoverage } = require('./fullscreen-detect.js');
+// 窗口显隐决策（工单 03）：中心点归属 + 「该显该隐 / 要不要重钉」的纯逻辑在本模块
+const { monitorIdForPoint, decideWindowVisibility } = require('./fullscreen-visibility.js');
 
 // ---------- 日志落盘（工单 00）----------
 //
@@ -526,6 +528,191 @@ function petsFromEnv() {
   return [{ id: 'main', size: 462, index: 0 }];
 }
 
+// ---------- 窗口显隐状态机（工单 03）----------
+//
+// 【为什么】全屏判定（工单 02）只算不藏。本片第一次真正 hide()/show()。决策本身是纯函数
+// （fullscreen-visibility.js，有单测），这里只做接线：用窗口**实时中心点**归属显示器、
+// 取交互忙碌信号、执行淡出/恢复、维护唤回压制。
+//
+// 【必须同时改的三处】否则会出「隐藏了没恢复 / 指针还在对隐藏窗口翻穿透 / 启动闪一下」：
+//   ① 指针兜底轮询加 isVisible 守卫（窗口不可见时不再翻点击穿透）；
+//   ② 首帧兜底显示过 visibleGate（启动即全屏时不许 show）；
+//   ③ 恢复路径自带置顶重钉（看门狗最坏要等 5 秒，等不起）。
+//
+// 【归属】宠物按窗口中心点落在哪块显示器来归属（monitorIdForPoint，与 shared-core 的
+// pointInRect 同一「点落在矩形内」口径）。中心点算不出来 / 采样失败 → 按非全屏处理（fail-open）。
+
+/** 淡出时长（ms）。透明/分层窗口上 setOpacity 并非处处可靠 → 失败直接 hide()（spec D） */
+const OPACITY_FADE_MS = 200;
+
+/** win.id → true = 因全屏而隐藏。只由本状态机改（首帧闸门也读它） */
+const hiddenByFullscreen = new Map();
+/**
+ * win.id → true = 首帧被闸门拦下（启动即全屏），窗口从未显示过。
+ * 与 hiddenByFullscreen 分开的原因：这只窗口没有走过「显→隐」的过渡，恢复时不能只按
+ * 「曾经隐藏过」判断（否则退出全屏后它会永远不出现），轮询要能把它补显示出来。
+ */
+const bootSuppressed = new Set();
+/** win.id → 上一次的全屏目标态：唤回压制靠「目标态发生切换」解除 */
+const lastFullscreenByWin = new Map();
+/**
+ * 「全屏应用时隐藏桌宠」全局开关（配置 hideOnFullscreen，缺省 true）。
+ * 模块级而不是轮询闭包里：首帧闸门（visibleGate）在窗口事件里读它——开关关掉时启动绝不能被拦下。
+ * 初值 true 是安全方向（配置读回前宁可先隐藏，也不会把「本该藏」变成「闪出来」）；
+ * 真正的值由轮询周期重读（托盘/设置页改它时宿主不重启本进程，见工单 09）。
+ */
+let hideOnFullscreenEnabled = true;
+/** win.id → 进行中的淡出定时器（恢复/再次决策前必须取消，避免淡出与恢复打架） */
+const fadeTimers = new Map();
+/** 取消某窗口进行中的淡出（淡出与恢复互斥） */
+function cancelFade(win) {
+  const timer = fadeTimers.get(win.id);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  fadeTimers.delete(win.id);
+}
+
+/**
+ * 隐藏：先淡出再 hide()。setOpacity 在透明/分层窗口上并非所有平台都可靠，
+ * 任何一步抛错都直接退化到 hide()——正确性优先于观感（spec D）。
+ */
+function fadeThenHide(win) {
+  cancelFade(win);
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    fadeTimers.delete(win.id);
+    try {
+      win.setOpacity(1); // 下次显示时从全不透明开始，不能停在上一次的半透明值
+    } catch {
+      /* 窗口已销毁 / 平台不支持：不影响 hide */
+    }
+    try {
+      win.hide();
+    } catch {
+      /* 窗口已销毁 */
+    }
+  };
+  try {
+    const start = Date.now();
+    const step = () => {
+      fadeTimers.delete(win.id);
+      if (finished || win.isDestroyed()) return;
+      const t = Math.min(1, (Date.now() - start) / OPACITY_FADE_MS);
+      try {
+        win.setOpacity(1 - t);
+      } catch {
+        finish(); // 淡出不可用：立刻隐藏，不拖泥带水
+        return;
+      }
+      if (t >= 1) {
+        finish();
+        return;
+      }
+      fadeTimers.set(win.id, setTimeout(step, 16));
+    };
+    step();
+  } catch {
+    finish();
+  }
+}
+
+/**
+ * 恢复：不抢焦点地显示 → 重钉置顶 → 提到最前 → 淡入。
+ * 顺序不能反：moveTop 只在置顶带内有效（见 control-request.js 的同名注释）。
+ * 淡入不可靠时（setOpacity 抛错）退化为直接可见——正确性优先于观感，与淡出同一取舍。
+ * 「静置一秒 + 恢复随机链」是工单 05 的冻结通道，不在这里。
+ */
+function showFullscreenRestore(win) {
+  cancelFade(win);
+  try {
+    win.setOpacity(0);
+    win.showInactive();
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.moveTop();
+  } catch (e) {
+    // 任一步失败：至少保证窗口可见且不透明，不留下半透明的残影
+    console.error('[dsh-pet-desktop-helper] fullscreen restore failed:', String(e && e.message ? e.message : e));
+    try {
+      win.showInactive();
+      win.setOpacity(1);
+    } catch {
+      /* 窗口已销毁 */
+    }
+    return;
+  }
+  fadeOpacity(win, 0, 1);
+}
+
+/**
+ * 不透明度渐变（0→1 淡入）。终点必定落到 `to`：中途任何异常都先归位再用不变，
+ * 绝不让窗口停在一个半透明的中间值上（那种坏法用户只会看见「宠物变淡了」且不会自愈）。
+ */
+function fadeOpacity(win, from, to) {
+  const start = Date.now();
+  const settle = () => {
+    fadeTimers.delete(win.id);
+    if (win.isDestroyed()) return;
+    try {
+      win.setOpacity(to);
+    } catch {
+      /* 窗口已销毁 */
+    }
+  };
+  const step = () => {
+    fadeTimers.delete(win.id);
+    if (win.isDestroyed()) return;
+    const t = Math.min(1, (Date.now() - start) / OPACITY_FADE_MS);
+    try {
+      win.setOpacity(from + (to - from) * t);
+    } catch {
+      settle();
+      return;
+    }
+    if (t >= 1) {
+      settle();
+      return;
+    }
+    fadeTimers.set(win.id, setTimeout(step, 16));
+  };
+  step();
+}
+
+/**
+ * 此刻窗口是否落在「正被全屏盖满」的那块屏上（首帧闸门用窗口**当前**位置）。
+ *
+ * 直连采样、**不走去抖**：首帧只有这一拍，等两轮就等于启动瞬间先闪一下（spec D 明令禁止）。
+ * 采样失败 → 空 → 恒判「非全屏」（fail-open，宁可多显示也不误藏）。
+ */
+function startsCoveredByFullscreen(win) {
+  try {
+    const { windows: wins, monitors } = sampleFullscreen((msg) => console.warn(msg));
+    const coverage = snapshotCoverage(wins, monitors);
+    const b = win.getBounds();
+    const id = monitorIdForPoint(monitors, b.x + b.width / 2, b.y + b.height / 2);
+    return id !== null && coverage[id] === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 首帧可见性闸门：`ready-to-show` 与 `did-finish-load` 的 400ms 兜底显示都必须先过这里。
+ * 启动时就已全屏（例如全屏游戏开着再自启）时窗口自始至终不显示——否则会闪一下。
+ */
+function visibleGate(win) {
+  if (win.isDestroyed()) return false;
+  if (!hideOnFullscreenEnabled) return true; // 开关关掉：功能整体不生效，首帧照常显示
+  if (hiddenByFullscreen.get(win.id) === true) return false;
+  if (startsCoveredByFullscreen(win)) {
+    // 记下「首帧被拦」：轮询要负责在退出全屏后把它补显示出来（它没有走过显→隐过渡）
+    bootSuppressed.add(win.id);
+    return false;
+  }
+  return true;
+}
+
 /** 窗口初始尺寸 = 宠物包围盒 + 四周外扩余量（4×0.5×size，与 renderer 的 WINDOW_MARGIN_RATIO 一致；
  *  renderer 首帧 set-bounds 会按真实配置精确覆盖，这里只是避免启动瞬间的尺寸跳变）。 */
 function petWindowSize(size) {
@@ -601,14 +788,18 @@ function createPetWindows() {
     // 默认整窗点击穿透（renderer 在光标进/出身体命中区时经 IPC 翻转可交互）；
     // forward:true 保证穿透期间 mousemove 仍转发进渲染端做命中判定。
     setWindowIgnore(win, true);
-    win.once('ready-to-show', () => win.showInactive());
+    // 首帧显示必须过闸门：启动时就已全屏时窗口自始至终不显示（见 visibleGate 的注释）
+    win.once('ready-to-show', () => {
+      if (visibleGate(win)) win.showInactive();
+    });
     // [#55 兜底显示] paintWhenInitiallyHidden:false 时渲染器可能不产出首帧，ready-to-show 便永不触发
     // （Electron 文档原文：ready-to-show "will never fire if you use paintWhenInitiallyHidden: false"），
     // 而 show() 只挂在它上面 → 窗口永远隐藏（进程活着、宠物逻辑照跑，桌面上什么都没有）。
     // 页面加载完成后强制兜底一次；zoomFactor 的设置在更早注册的 did-finish-load 里，顺序不受影响。
+    // 工单 03：兜底同样过 visibleGate——启动即全屏时不许在这里把窗口闪出来。
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => {
-        if (!win.isDestroyed() && !win.isVisible()) win.showInactive();
+        if (!win.isDestroyed() && !win.isVisible() && visibleGate(win)) win.showInactive();
       }, 400);
     });
     // [#55 兜底交互] 上面的翻转链路只有「Electron forward 鼠标钩子 → 渲染端命中判定」一个入口，
@@ -620,6 +811,9 @@ function createPetWindows() {
     // 本进程无从判断这件事——光看光标位置与窗口位移分不清"拖拽跟手"和"漫游/抛掷"，所以由渲染端上报。
     const pointerTimer = setInterval(() => {
       if (pointerFallbackPaused || win.isDestroyed()) return;
+      // 工单 03：窗口因全屏隐藏后，光标位置不变仍会不断翻点击穿透——隐藏窗口不需要交互状态，
+      // 直接跳过（同时避免对不可见窗口做无意义的 getBounds/屏幕查询）。
+      if (!win.isVisible()) return;
       const b = win.getBounds();
       if (b.width < 8 || b.height < 8) return; // 尺寸还没落定（renderer 首帧上报前）
       const ignoring = windowIgnore.get(win.id) !== false;
@@ -655,6 +849,7 @@ function createPetWindows() {
     win.on('closed', () => {
       clearInterval(pointerTimer);
       clearInterval(topmostTimer);
+      cancelFade(win);
       windows.delete(pet.id);
       lastRequestedBounds.delete(win.id);
       winMargins.delete(win.id);
@@ -662,6 +857,9 @@ function createPetWindows() {
       inputBusy.delete(win.id);
       inputRegions.delete(win.id);
       offBodyMs.delete(win.id);
+      hiddenByFullscreen.delete(win.id);
+      bootSuppressed.delete(win.id);
+      lastFullscreenByWin.delete(win.id);
     });
     win
       // 必须用 __dirname 拼绝对路径：loadFile 的相对路径是相对 app.getAppPath() 解析的，
@@ -911,6 +1109,7 @@ async function startTray() {
     // 全局开关初值取 main 条目顶层（成品聚合已合并内置默认；缺了按 true）
     if (merged.main && typeof merged.main.hideOnFullscreen === 'boolean') {
       hideOnFullscreen = merged.main.hideOnFullscreen;
+      hideOnFullscreenEnabled = hideOnFullscreen; // 与状态机共用同一份开关（托盘初值即配置值）
     }
     // 模板由纯函数产出（ticket 01）。当前接宠物勾选 + 全屏隐藏开关（ticket 09）；AI 设置 /
     // 开机自启 / 数据目录 / 说明 / 退出仍是模板里已有的应用项，留给后续 ticket 接线。
@@ -935,6 +1134,7 @@ async function startTray() {
             checked: item.checked,
             click: () => {
               hideOnFullscreen = !item.checked; // 乐观翻勾，不重启进程
+              hideOnFullscreenEnabled = hideOnFullscreen; // 状态机立即跟上，不等下一轮读配置
               traySetHideOnFullscreen(hideOnFullscreen);
               rebuildTrayMenu();
             },
@@ -994,24 +1194,71 @@ app.whenReady().then(() => {
 
   createPetWindows();
 
-  // ---------- 全屏判定（工单 02，只算不藏）----------
+  // ---------- 全屏判定与窗口显隐（工单 02 只算不藏 / 工单 03 开始真正隐藏）----------
   //
   // 【做什么】每 500ms「采样 → 判定」一次：fullscreen-sampler 取候选窗口矩形与显示器矩形
   // （FFI，失败 fail-open 返回空），fullscreen-detect 按覆盖率 ≥ 98% + 去抖 2 轮算出目标态
-  // （哪几块屏全屏中）。**本片只算不藏**：结论只进日志，窗口显隐一行代码都不动。
+  // （哪几块屏全屏中）；再按每只宠物的**窗口中心点**归属屏 + fullscreen-visibility 的纯决策，
+  // 决定这只宠物此刻该显示还是隐藏。
   //
   // 【为什么独立】这是唯一新增的周期任务，不复用也不干扰指针轮询 / 置顶看门狗 / 宿主存活
   // 探测——它们各有自己的节拍与状态，拼在一起会让任何一方的失败污染另一方。
   //
-  // 【日志】结论变化才打一行（如 `[fullscreen] display 65537: on/off`），稳定不刷屏；
-  // 判定规则、平台边界、fail-open 语义全在两个模块里（均有单测），本文件不出现平台分支。
+  // 【日志】结论变化才打一行（`[fullscreen] display <id>: on/off`、`[fullscreen] hide/show <petId>`），
+  // 稳定不刷屏；判定规则、平台边界、fail-open 语义全在模块里（均有单测），本文件不出现平台分支。
   const FULLSCREEN_POLL_MS = 500;
   /** 每块屏的去抖状态（monitor.id → {value, run}），判定模块是纯函数，状态由接线方持有 */
   const fullscreenDebounce = new Map();
   /** 上一次打日志的结论（monitor.id → 'on'|'off'），变化才打 */
   const fullscreenLogged = new Map();
+  /**
+   * 周期重读「全屏应用时隐藏桌宠」开关（工单 09：托盘改它时宿主不重启本进程，壳要自己跟上）。
+   * 读不到时保持上一次的值——fail-open 的方向是「继续隐藏」，读到坏值绝不擅自把功能关掉。
+   */
+  let lastConfigReadMs = 0;
+  const CONFIG_REREAD_MS = 2000;
+  const refreshHideOnFullscreen = () => {
+    // bridge 模式下请求行必须带回调 URL，端口在 startBridgeCallback 的 listen 回调里才有值：
+    // 未就绪时发了也只会挂到 45s 超时，等下一拍即可。
+    if (BRIDGE && !bridgeCallbackUrl) return;
+    const nowMs = Date.now();
+    if (nowMs - lastConfigReadMs < CONFIG_REREAD_MS) return;
+    lastConfigReadMs = nowMs;
+    hostRequest('GET', PET_ROUTE + '/config')
+      .then((resp) => {
+        const merged = JSON.parse(resp.body || '{}');
+        if (merged.main && typeof merged.main.hideOnFullscreen === 'boolean') {
+          hideOnFullscreenEnabled = merged.main.hideOnFullscreen;
+        }
+      })
+      .catch(() => {
+        /* 读配置失败保持上一次的值（见上） */
+      });
+  };
+  /** 窗口中心点归属的显示器 id（算不出来 / 采样失败 → null，fail-open 按非全屏处理） */
+  const monitorOfWindow = (win, monitors) => {
+    const b = win.getBounds();
+    return monitorIdForPoint(monitors, b.x + b.width / 2, b.y + b.height / 2);
+  };
   setInterval(() => {
     try {
+      refreshHideOnFullscreen();
+      // 开关关掉时：不采样、不判定，并把已经被藏起来的窗口全部放回来（行为与改动前一致）。
+      // 首帧被闸门拦下的窗口也要算进来——它同样处于「不可见且原因来自本功能」的状态。
+      if (!hideOnFullscreenEnabled) {
+        fullscreenDebounce.clear();
+        for (const win of windows.values()) {
+          if (win.isDestroyed()) continue;
+          const suppressed = bootSuppressed.has(win.id);
+          if (hiddenByFullscreen.get(win.id) !== true && !suppressed) continue;
+          hiddenByFullscreen.set(win.id, false);
+          bootSuppressed.delete(win.id);
+          lastFullscreenByWin.delete(win.id);
+          showFullscreenRestore(win);
+          console.error(`[fullscreen] show ${[...windows.keys()].find((id) => windows.get(id) === win)} (disabled)`);
+        }
+        return;
+      }
       const { windows: wins, monitors } = sampleFullscreen((msg) => console.warn(msg));
       const state = {};
       for (const [id, s] of fullscreenDebounce) state[id] = s;
@@ -1025,8 +1272,52 @@ app.whenReady().then(() => {
           console.error(`[fullscreen] display ${id}: ${tag}`);
         }
       }
+      // 逐宠物执行显隐决策（纯逻辑在 fullscreen-visibility.js；这里只做 I/O 与状态持有）
+      for (const [petId, win] of windows) {
+        if (win.isDestroyed()) continue;
+        // 首帧被闸门拦下的窗口没走过「显→隐」过渡：去抖还没给出第一轮结论（prev 为 undefined）
+        // 时不能凭 targets 的 fail-open 默认值把它放出来，否则启动即全屏会闪半秒。
+        if (bootSuppressed.has(win.id) && lastFullscreenByWin.get(win.id) === undefined) continue;
+        const monId = monitorOfWindow(win, monitors);
+        // 归属算不出来 → fail-open 当作非全屏，宁可多显示也不误藏
+        const fullscreen = monId === null ? false : targets[monId] === true;
+        const prev = lastFullscreenByWin.get(win.id);
+        const fullscreenChanged = prev !== undefined && prev !== fullscreen;
+        lastFullscreenByWin.set(win.id, fullscreen);
+        // 首帧被闸门拦下的窗口对用户同样是「隐藏中」，必须并进 hidden——否则恢复时决策
+        // 给不出 reassertTopmost，主进程就不会 show，窗口永远不出现。
+        const suppressed = bootSuppressed.has(win.id);
+        const decision = decideWindowVisibility({
+          enabled: hideOnFullscreenEnabled,
+          fullscreen,
+          hidden: hiddenByFullscreen.get(win.id) === true || suppressed,
+          busy: inputBusy.get(win.id) === true,
+          // 唤回压制（工单 04）：决策模块已实现并单测覆盖，接线留给 04 号工单
+          recallHold: false,
+          fullscreenChanged,
+        });
+        if (!decision.visible) {
+          if (hiddenByFullscreen.get(win.id) === true) continue;
+          hiddenByFullscreen.set(win.id, true);
+          // 首帧被拦下的窗口从未显示过：直接标隐藏，不做淡出（没东西可淡）
+          if (suppressed) {
+            bootSuppressed.delete(win.id);
+          } else {
+            fadeThenHide(win);
+          }
+          console.error(`[fullscreen] hide ${petId}`);
+          continue;
+        }
+        // 恢复：既包括本进程隐藏过的窗口，也包括首帧就被闸门拦下、从未显示过的窗口
+        if (hiddenByFullscreen.get(win.id) === true || suppressed) {
+          hiddenByFullscreen.set(win.id, false);
+          bootSuppressed.delete(win.id);
+          if (decision.reassertTopmost) showFullscreenRestore(win);
+          console.error(`[fullscreen] show ${petId}`);
+        }
+      }
     } catch (e) {
-      // 采样/判定路径上任何意外都不能影响宠物：吞掉，下一拍重来
+      // 采样/判定/显隐路径上任何意外都不能影响宠物：吞掉，下一拍重来
       console.error('[dsh-pet-desktop-helper] fullscreen poll failed:', String(e && e.message ? e.message : e));
     }
   }, FULLSCREEN_POLL_MS).unref?.();

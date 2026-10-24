@@ -89,6 +89,7 @@ const required = [
   'runtime/electron-helper/helper-log.js', // 桌面模式日志落盘判定与写入器（main.js require，缺了会启动即崩）
   'runtime/electron-helper/fullscreen-detect.js', // 全屏判定纯逻辑（工单 02，main.js require，缺了会启动即崩）
   'runtime/electron-helper/fullscreen-sampler.js', // 全屏判定 FFI 采样器（工单 02，main.js require，缺了会启动即崩）
+  'runtime/electron-helper/fullscreen-visibility.js', // 窗口显隐决策纯逻辑（工单 03，main.js require，缺了会启动即崩）
   'runtime/electron-helper/desktop-geometry.js', // 活动边界与菜单工作区分离
   'runtime/electron-helper/preload.js', // 桌面模式 preload 桥
   'runtime/electron-helper/renderer.js', // 桌面模式渲染端（宠物本体）

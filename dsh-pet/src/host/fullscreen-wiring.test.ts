@@ -98,5 +98,6 @@ describe('发布清单 —— 新模块必须进 prepack-check 必需文件', ()
     const prepack = readSource('../../scripts/prepack-check.js');
     assert.match(prepack, /'runtime\/electron-helper\/fullscreen-detect\.js'/);
     assert.match(prepack, /'runtime\/electron-helper\/fullscreen-sampler\.js'/);
+    assert.match(prepack, /'runtime\/electron-helper\/fullscreen-visibility\.js'/);
   });
 });

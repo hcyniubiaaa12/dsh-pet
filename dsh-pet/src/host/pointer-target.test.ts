@@ -220,14 +220,20 @@ describe('源码守卫 —— helper 的两个兜底必须在位', () => {
   const main = readSource(helper + 'main.js');
 
   test('#55-1 兜底显示：ready-to-show 之外还要有"加载完成后仍未显示就 show"', () => {
-    assert.ok(/once\('ready-to-show', \(\) => win\.showInactive\(\)\)/.test(main), '显示不得抢其它应用焦点');
+    // 工单 03：两处显示都要先过 visibleGate（启动即全屏时不许闪出来），但 show 的方式必须是
+    // showInactive —— 显示不得抢其它应用焦点。断言改成「同一行里先闸门、再 showInactive」。
+    assert.ok(
+      /visibleGate\(win\)\) win\.showInactive\(\)/.test(main) &&
+        /ready-to-show[\s\S]{0,120}showInactive\(\)/.test(main),
+      '显示不得抢其它应用焦点（且必须过显隐闸门）',
+    );
     assert.ok(
       /once\('did-finish-load'/.test(main),
       '必须有 did-finish-load 兜底（paintWhenInitiallyHidden:false 时 ready-to-show 永不触发）',
     );
     assert.ok(
-      /!win\.isDestroyed\(\) && !win\.isVisible\(\)\) win\.showInactive\(\)/.test(main),
-      '兜底必须在"仍未显示"时才 show',
+      /!win\.isDestroyed\(\) && !win\.isVisible\(\) && visibleGate\(win\)\) win\.showInactive\(\)/.test(main),
+      '兜底必须在"仍未显示"时才 show，且尊重「该隐藏」状态',
     );
   });
 

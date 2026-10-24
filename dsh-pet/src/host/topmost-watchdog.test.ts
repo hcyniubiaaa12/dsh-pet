@@ -108,7 +108,10 @@ describe('源码守卫 —— 置顶看门狗必须在 main.js 里按这套规�
       /require\('\.\/topmost-watchdog\.js'\)/.test(main),
       '看门狗判定必须复用 runtime/electron-helper/topmost-watchdog.js（纯逻辑有单测）',
     );
-    assert.ok(!/win\.moveTop\(/.test(main), 'moveTop()=HWND_TOP 不落置顶带，不得用它当兜底');
+    // moveTop()=HWND_TOP 不落置顶带，不能当**看门狗**的兜底。全屏恢复（工单 03）与单实例
+    // 唤回（control-request.js）在 setAlwaysOnTop 之后用它「提到最前」，那是另一回事：
+    // 它们不指望 moveTop 置顶，只指望它把已在置顶带的窗口提到最前。
+    assert.ok(!/win\.moveTop\(/.test(watchdogBody()), '看门狗不得用 moveTop 当兜底');
   });
 
   test('看门狗按判定函数 + 命名节拍运行，并在窗口关闭时停掉', () => {
