@@ -745,3 +745,35 @@ describe('/hide-on-fullscreen —— 托盘开关的写配置入口（ticket 09�
     }
   });
 });
+
+describe('/hidden-pets —— 桌面壳上报隐藏集合（ticket 06，瞬时内存态）', () => {
+  test('GET → 405（写端点；方法错是协议层错误）', async () => {
+    assert.equal((await call('/dsh-pet-7340/hidden-pets')).status, 405);
+  });
+
+  test('请求体不是合法 JSON → 400（协议层错误，与其它端点同一口径）', async () => {
+    const r = await call('/dsh-pet-7340/hidden-pets', 'POST', '{ 不是 json');
+    assert.equal(r.status, 400);
+    assert.match(r.body, /invalid JSON body/);
+  });
+
+  test('petIds 非数组 → 200 + bad-request（参数校验在读盘之前）', async () => {
+    for (const body of [{}, { petIds: 'main' }, { petIds: 3 }]) {
+      const r = await call('/dsh-pet-7340/hidden-pets', 'POST', JSON.stringify(body));
+      assert.equal(r.status, 200, JSON.stringify(body));
+      const parsed = JSON.parse(r.body) as { ok: boolean; reason: string };
+      assert.equal(parsed.ok, false, JSON.stringify(body));
+      assert.equal(parsed.reason, 'bad-request', JSON.stringify(body));
+    }
+  });
+
+  test('合法上报 → 200 + ok:true + accepted 计数（含空集合清残留；坏元素被清洗）', async () => {
+    const r = await call('/dsh-pet-7340/hidden-pets', 'POST', JSON.stringify({ petIds: ['main', 42, '', '测试宠'] }));
+    assert.equal(r.status, 200);
+    const parsed = JSON.parse(r.body) as { ok: boolean; accepted: number };
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.accepted, 2);
+    const empty = await call('/dsh-pet-7340/hidden-pets', 'POST', JSON.stringify({ petIds: [] }));
+    assert.equal((JSON.parse(empty.body) as { ok: boolean; accepted: number }).accepted, 0);
+  });
+});

@@ -104,6 +104,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials';
 import { queryBalance } from './balance/index';
 import { generateWhisper } from './whisper';
 import { automaticWhisperSchedule } from './whisper-policy';
+import { createHiddenPetRegistry, whisperSkipDecision } from './hidden-pets';
 import { generateChat, type ChatMemoryMessage } from './chat';
 import { configuredModel } from './model-selection';
 import { limitPool, pickMeme, readMemePool } from './memes';
@@ -605,6 +606,9 @@ export function apply(ctx: any): void {
   // 改造前这份节流靠 whisperCache（缓存 + ts 比较），现在"该不该生成"由调度侧决定、
   // "生成结果"直接写 S——多端共享同一句由 S 天然保证，不再需要第二份缓存。
   const lastWhisperAt = new Map<string, number>();
+  // 当前因全屏被桌面壳隐藏的宠物 id 集合（工单 06）：瞬时内存态，不落盘。
+  // 桌面壳隐藏 / 恢复时经 POST /hidden-pets 上报**全量集合**；启动时先上报空集合清残留。
+  const hiddenPets = createHiddenPetRegistry();
 
   // 对话记忆文件（唯一读写方 = 本进程；浏览器/桌面两端都只是客户端 → 同一实例天然共享同一份记忆）。
   // 结构双层：{ <种类桶 assetRoot ?? petId>: { <实例 id>: { messages: ChatMemoryMessage[] } } }
@@ -1326,6 +1330,28 @@ export function apply(ctx: any): void {
       // 有意**不**写 sections.config、**不** syncDesktop：托盘点击方自持乐观勾选态，
       // 桌面壳下一次读配置即生效；打包形态宿主托盘还有 1s 轮询自然对齐。
       return { kind: 'json', status: 200, obj: { ok: true, enabled: payload.enabled } };
+    }
+
+    // 桌面壳上报「因全屏被隐藏」的宠物 id 集合（工单 06）：POST /hidden-pets，body { petIds: string[] }。
+    // 全量替换语义（不是增量）：隐藏 / 恢复都由壳把**当前完整集合**报上来；空集合即清残留。
+    // 瞬时内存态、不落盘、无外部调用——失败面极小，校验失败才报错，其余一律收下。
+    if (rest === 'hidden-pets') {
+      if (method !== 'POST') return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      let payload: { petIds?: unknown };
+      try {
+        payload = JSON.parse(body ?? '') as { petIds?: unknown };
+      } catch {
+        return { kind: 'json', status: 400, obj: { error: 'invalid JSON body' } };
+      }
+      if (!Array.isArray(payload.petIds)) {
+        return {
+          kind: 'json',
+          status: 200,
+          obj: { ok: false, reason: 'bad-request', message: 'petIds 必须是字符串数组（全量集合，非增量）' },
+        };
+      }
+      const accepted = hiddenPets.replace(payload.petIds);
+      return { kind: 'json', status: 200, obj: { ok: true, accepted } };
     }
 
     // 桌面端「重载配置」（右键菜单 → POST /reload）：重启桌面 Helper，全部桌面宠物窗口按最新配置重建。
@@ -2359,14 +2385,21 @@ export function apply(ctx: any): void {
           if (!schedule.enabled) continue;
           const sec = schedule.periodSec;
           min = Math.min(min, sec);
-          if (now - (lastWhisperAt.get(petId) ?? 0) < sec * 1000) continue;
-          // 占用锁：这只宠物被占用时**跳过这一拍**——不生成也不补（碎碎念是瞬时事件，过期即弃）。
-          // 而且**不推进 lastWhisperAt**：锁一放开，下一拍就该照常说。
-          // 宿主侧只挡这一处 **per-pet** 来源；两个**全局段**（balance / workStatus）不在这里挡——
+          // 这一拍的到点 + 跳过判定（./hidden-pets）：周期没到不生成；占用锁与全屏隐藏（工单 06）
+          // 同权跳过——不生成也不补（碎碎念是瞬时事件，过期即弃），而且**不推进 lastWhisperAt**：
+          // 锁一放开 / 窗口一恢复，下一拍就该照常说，不推迟首次碎碎念。
+          // 宿主侧只挡这两处 **per-pet** 来源；两个**全局段**（balance / workStatus）不在这里挡——
           // 它们所有宠物共用一份，宿主"跳过写入"会连带静音别的宠物；那两处由渲染端按宠物忽略
           // （见 src/client/pet.ts 的冻结判定），代价是叶子照常推进、渲染端自己不看。
-          if (lock.locked(petId)) continue;
-          lastWhisperAt.set(petId, now);
+          const decision = whisperSkipDecision({
+            lastAt: lastWhisperAt.get(petId),
+            now,
+            periodSec: sec,
+            hidden: hiddenPets.has(petId),
+            locked: lock.locked(petId),
+          });
+          if (!decision.generate) continue;
+          if (decision.advance) lastWhisperAt.set(petId, now);
           // 不 await：生成要几秒，别把调度拍拖住（每只宠物独立生成，互不阻塞）
           void publishWhisper(petId).catch(() => {});
         }

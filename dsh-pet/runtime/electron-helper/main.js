@@ -564,6 +564,28 @@ const lastFullscreenByWin = new Map();
 let hideOnFullscreenEnabled = true;
 /** win.id → 进行中的淡出定时器（恢复/再次决策前必须取消，避免淡出与恢复打架） */
 const fadeTimers = new Map();
+
+// ---------- 隐藏集合上报宿主（工单 06）----------
+//
+// 宿主的自动碎碎念调度并不知道窗口被藏起来了。这里把「当前因全屏而隐藏」的宠物 id **全量**
+// 集合（petIds）经既有 hostRequest 报给宿主（POST /hidden-pets）；宿主据此跳过集合内宠物的
+// 自动碎碎念生成（省一次 AI 调用），不推进计时戳——恢复后下一拍照常。
+//
+// 【失败语义】上报失败只记日志，绝不回滚显隐——显隐是用户可见的主效果，碎碎念冻结是次要优化。
+// 【启动清残留】进程启动先上报一次空集合：宿主侧集合是瞬时内存态，上一壳进程的残留只能靠
+// 这一次上报清掉（宿主自己重启自然清空）。
+/** 上一次已上报的隐藏集合快照（petId 排序后 join，只作比对用；变化才上报，不每 500ms 刷） */
+let lastReportedHidden = '';
+
+/** 把当前隐藏集合全量上报宿主；失败只记日志（显隐状态机变量在这里一个都不碰） */
+function reportHiddenPets(ids) {
+  const key = [...ids].sort().join(',');
+  if (key === lastReportedHidden) return; // 结论没变不上报
+  lastReportedHidden = key;
+  hostRequest('POST', PET_ROUTE + '/hidden-pets', JSON.stringify({ petIds: ids })).catch((e) => {
+    console.error('[dsh-pet-desktop-helper] report hidden-pets failed:', String(e && e.message ? e.message : e));
+  });
+}
 /** 取消某窗口进行中的淡出（淡出与恢复互斥） */
 function cancelFade(win) {
   const timer = fadeTimers.get(win.id);
@@ -1194,6 +1216,10 @@ app.whenReady().then(() => {
 
   createPetWindows();
 
+  // 启动先上报一次空集合（工单 06）：清掉宿主侧上一壳进程残留的隐藏状态，免得宠物被永久静音。
+  // 快照比对从 '' 起步，空集合这次必然发出；之后集合变化才上报（见 reportHiddenPets）。
+  reportHiddenPets([]);
+
   // ---------- 全屏判定与窗口显隐（工单 02 只算不藏 / 工单 03 开始真正隐藏）----------
   //
   // 【做什么】每 500ms「采样 → 判定」一次：fullscreen-sampler 取候选窗口矩形与显示器矩形
@@ -1316,6 +1342,13 @@ app.whenReady().then(() => {
           console.error(`[fullscreen] show ${petId}`);
         }
       }
+      // 本拍显隐决策收敛后，把「当前因全屏而隐藏」的宠物集合全量上报宿主（工单 06）：
+      // 函数内部有快照比对，集合没变是空转、变化才真正发请求。
+      reportHiddenPets(
+        [...windows.entries()]
+          .filter(([, win]) => !win.isDestroyed() && hiddenByFullscreen.get(win.id) === true)
+          .map(([petId]) => petId),
+      );
     } catch (e) {
       // 采样/判定/显隐路径上任何意外都不能影响宠物：吞掉，下一拍重来
       console.error('[dsh-pet-desktop-helper] fullscreen poll failed:', String(e && e.message ? e.message : e));
