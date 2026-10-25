@@ -559,17 +559,33 @@ const FREEZE_RELEASE_DELAY_MS = 1000;
  */
 function sendFreeze(win, frozen) {
   try {
+    if (frozen === true) cancelFreezeRelease(win); // 新冻结先撤掉未触发的旧解冻（1 秒内再次隐藏的场景）
     if (!win.isDestroyed()) win.webContents.send('pet:fullscreen-freeze', { frozen: frozen === true });
   } catch (e) {
     console.warn('[dsh-pet-desktop-helper] freeze notify failed:', String(e && e.message ? e.message : e));
   }
 }
 
-/** 恢复后静置一秒再解冻（工单 05）：解冻消息延到这时才发，渲染端在此之前不做自发动作 */
+/**
+ * 恢复后静置一秒再解冻（工单 05）：解冻消息延到这时才发，渲染端在此之前不做自发动作。
+ * 定时器按 win.id 跟踪（同 fadeTimers 的模式）：隐藏→恢复→1 秒内再次隐藏时，新冻结要先
+ * 取消未触发的旧解冻——否则旧定时器到点把刚冻结的窗口解冻，冻结窗口又恢复自发行为。
+ */
+const freezeReleaseTimers = new Map();
 function scheduleFreezeRelease(win) {
-  setTimeout(() => {
+  cancelFreezeRelease(win);
+  const timer = setTimeout(() => {
+    freezeReleaseTimers.delete(win.id);
     if (!win.isDestroyed()) sendFreeze(win, false);
   }, FREEZE_RELEASE_DELAY_MS);
+  freezeReleaseTimers.set(win.id, timer);
+}
+/** 取消某窗口未触发的解冻定时器（新冻结前必须调用，与 cancelFade 同一互斥思路） */
+function cancelFreezeRelease(win) {
+  const timer = freezeReleaseTimers.get(win.id);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  freezeReleaseTimers.delete(win.id);
 }
 
 /** win.id → true = 因全屏而隐藏。只由本状态机改（首帧闸门也读它） */
@@ -611,13 +627,16 @@ const fadeTimers = new Map();
 /** 上一次已上报的隐藏集合快照（petId 排序后 join，只作比对用；变化才上报，不每 500ms 刷） */
 let lastReportedHidden = '';
 
-/** 把当前隐藏集合全量上报宿主；失败只记日志（显隐状态机变量在这里一个都不碰） */
+/** 把当前隐藏集合全量上报宿主；失败只记日志并把快照回滚，下一拍重发（显隐状态机变量在这里一个都不碰） */
 function reportHiddenPets(ids) {
   const key = [...ids].sort().join(',');
   if (key === lastReportedHidden) return; // 结论没变不上报
   lastReportedHidden = key;
   hostRequest('POST', PET_ROUTE + '/hidden-pets', JSON.stringify({ petIds: ids })).catch((e) => {
     console.error('[dsh-pet-desktop-helper] report hidden-pets failed:', String(e && e.message ? e.message : e));
+    // 快照回滚成「必然不等于当前 key」的值，让下一拍重试——包括清空（key === ''）失败的场景。
+    // lastReportedHidden 只参与相等比对，任何永不可能与 join(',') 结果相等的哨兵都安全。
+    lastReportedHidden = '\u0000failed';
   });
 }
 /** 取消某窗口进行中的淡出（淡出与恢复互斥） */
@@ -1334,6 +1353,9 @@ app.whenReady().then(() => {
           scheduleFreezeRelease(win);
           console.error(`[fullscreen] show ${[...windows.keys()].find((id) => windows.get(id) === win)} (disabled)`);
         }
+        // 这里的 return 会跳过轮询末尾的上报：放回窗口后必须显式把空集合报给宿主，
+        // 否则宿主侧的碎碎念压制集合收不到清空（工单 06）
+        reportHiddenPets([]);
         return;
       }
       const { windows: wins, monitors } = sampleFullscreen((msg) => console.warn(msg));
@@ -1352,12 +1374,22 @@ app.whenReady().then(() => {
       // 逐宠物执行显隐决策（纯逻辑在 fullscreen-visibility.js；这里只做 I/O 与状态持有）
       for (const [petId, win] of windows) {
         if (win.isDestroyed()) continue;
-        // 首帧被闸门拦下的窗口没走过「显→隐」过渡：去抖还没给出第一轮结论（prev 为 undefined）
-        // 时不能凭 targets 的 fail-open 默认值把它放出来，否则启动即全屏会闪半秒。
-        if (bootSuppressed.has(win.id) && lastFullscreenByWin.get(win.id) === undefined) continue;
         const monId = monitorOfWindow(win, monitors);
         // 归属算不出来 → fail-open 当作非全屏，宁可多显示也不误藏
         const fullscreen = monId === null ? false : targets[monId] === true;
+        // 首帧被闸门拦下的窗口：去抖还没给出第一轮结论时 targets 仍是 fail-open 默认值
+        //（无全屏），不能据此把窗口放出来——否则启动即全屏会闪半秒。首拍按「保持隐藏」处理：
+        // 标记 hidden、走无淡出的隐藏分支（它从未显示过，没东西可淡），并写入 lastFullscreenByWin
+        // 让下一拍起正常决策接管（此后退出全屏能照常恢复）。这里必须落在 lastFullscreenByWin
+        // 写入点之后，否则条件永真、窗口永远出不来。
+        if (bootSuppressed.has(win.id) && lastFullscreenByWin.get(win.id) === undefined) {
+          hiddenByFullscreen.set(win.id, true);
+          bootSuppressed.delete(win.id);
+          lastFullscreenByWin.set(win.id, fullscreen);
+          sendFreeze(win, true);
+          console.error(`[fullscreen] hide ${petId} (boot)`);
+          continue;
+        }
         const prev = lastFullscreenByWin.get(win.id);
         const fullscreenChanged = prev !== undefined && prev !== fullscreen;
         lastFullscreenByWin.set(win.id, fullscreen);

@@ -641,7 +641,12 @@ class PetSprite {
     const stamp = '[dsh-pet] ' + new Date().toTimeString().slice(0, 8) + ' pet=' + this.pet.id;
     if (next) {
       // 隐藏瞬间正在飞/正在走：就地定格——停掉自主移动与飞行，位置留在当前帧。
-      // customPos 不在 startThrow 里补：那只窗口此刻不可见，恢复后从定格点继续（原处观感）。
+      // 正在飞时必须先把当前 pos 写回 customPos（与 startThrow 落定分支同一写法）：stopThrow
+      // 只取消飞行循环、不落盘位置，隐藏期间的 resize 会经 position() 按 customPos 摆窗口，
+      // 不写回的话窗口一重摆宠物就瞬移回起飞前的旧位置。
+      if (this.throwState) {
+        this.customPos = { rx: (this.pos.x + this.halfW) / VIEW.w, ry: (this.pos.y + this.halfH) / VIEW.h };
+      }
       this.stopMove();
       this.stopThrow();
       this.stopDragFollow();
@@ -650,7 +655,10 @@ class PetSprite {
     }
     console.log(stamp + ' 全屏冻结解除：恢复随机链');
     // 解冻即静置期满：回 idle 一次，播完由 handleEnded 接回随机链（与占用锁解冻同一恢复语义，
-    // 但不查工作状态档位——onWorkTick 一直在跑，工作动画由它自己维持）
+    // 但不查工作状态档位——onWorkTick 一直在跑，工作动画由它自己维持）。
+    // 前台正有 playback（/anim、/whisper 气泡动画——冻结期间它们照常）时不抢：顶掉它就违反
+    // spec「命令触发的动画恢复后要能看到」，让 handleEnded 播完后自然接回随机链。
+    if (this.playback) return;
     if (this.animations.idle.length) this.playOnce(S.pick(this.animations.idle, this.anim));
   }
 
@@ -732,6 +740,10 @@ class PetSprite {
     // 带 anim 的气泡（默认就是 true），说话动画播完就把工作状态动画点回来，冻结形同虚设。
     // 播放回执已经在上面上报，不受这一行影响。
     if (this.frozen) return;
+    // 全屏冻结（工单 05）：隐藏期间动画链同样不推进（回执照报，见上）——事件/互动动画
+    // 播完若继续经 playOnce 恢复档位/回 idle，就是解冻后看不到了；解冻时 applyDeskFreeze(false)
+    // 会自己接回随机链或当前 playback。
+    if (this.deskFrozen) return;
     const { animations } = { animations: this.animations };
     // 事件动画播完：回 idle（与 drag/clicks 同分支，不进随机链）；气泡由定时器自动消失，与动画解耦
     const isEvent = S.isEventAnim(animations.events, this.anim);
@@ -783,6 +795,9 @@ class PetSprite {
     // 说话动画播完就会经 handleEnded 走到这里。解冻路径不受影响：applyFreeze(false) 是先置
     // this.frozen = false 再调它。
     if (this.frozen) return false;
+    // 全屏冻结（工单 05）：隐藏期间不许由这条路把工作状态动画点回来——同占用锁的自防
+    // 语义（这条返回 false 后调用方还会经 deskFrozen 门禁拦住，双保险）。
+    if (this.deskFrozen) return false;
     const state = this.workState;
     if (!state || state === 'success' || state === 'error') return false;
     const pool = this.animations.events?.workStatus;

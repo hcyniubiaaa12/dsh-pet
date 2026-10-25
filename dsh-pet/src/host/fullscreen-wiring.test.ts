@@ -101,3 +101,68 @@ describe('发布清单 —— 新模块必须进 prepack-check 必需文件', ()
     assert.match(prepack, /'runtime\/electron-helper\/fullscreen-visibility\.js'/);
   });
 });
+
+describe('main.js 接线守卫 —— code-review 修复（bootSuppressed / 开关关闭上报 / 解冻定时器）', () => {
+  const main = readSource(helper + 'main.js');
+
+  test('bootSuppressed 窗口必须能到达 lastFullscreenByWin 写入点（否则退出全屏永远不出现）', () => {
+    // 修复前：`if (bootSuppressed.has(...) && lastFullscreenByWin.get(...) === undefined) continue;`
+    // 挡在写入之前，条件永真——窗口永远到不了 lastFullscreenByWin.set。守卫钉住：
+    // 轮询循环里不得再有「continue 短路在 set 之前」的形状，bootSuppressed 首拍必须
+    // 走「保持隐藏 + 写入上一拍结论」的完整分支。
+    assert.ok(
+      !/if \(bootSuppressed\.has\(win\.id\) && lastFullscreenByWin\.get\(win\.id\) === undefined\) continue;/.test(
+        main,
+      ),
+      '不得用 continue 短路 bootSuppressed 窗口（条件永真，退出全屏后宠物永久不出现）',
+    );
+    // 首拍分支：标隐藏 + 清 suppressed + 写 lastFullscreenByWin + 发冻结，然后才 continue
+    const bootBlock = main.match(
+      /if \(bootSuppressed\.has\(win\.id\) && lastFullscreenByWin\.get\(win\.id\) === undefined\) \{[\s\S]*?\n\x20{10}\}/,
+    );
+    assert.ok(bootBlock, 'bootSuppressed 首拍必须走完整决策分支（标隐藏 + 写结论 + 冻结）');
+    assert.match(bootBlock[0], /hiddenByFullscreen\.set\(win\.id, true\)/, '首拍必须标隐藏（不闪）');
+    assert.match(
+      bootBlock[0],
+      /lastFullscreenByWin\.set\(win\.id, fullscreen\)/,
+      '首拍必须写入全屏结论（下一拍起正常接管）',
+    );
+    assert.match(bootBlock[0], /sendFreeze\(win, true\)/, '首拍必须发冻结（渲染端从首帧起不做自发行为）');
+  });
+
+  test('开关关闭分支放回窗口后必须上报空集合（宿主侧隐藏集合要收到清空）', () => {
+    // !hideOnFullscreenEnabled 分支 return 之前必须有一句 reportHiddenPets([])
+    const disabled = main.match(/if \(!hideOnFullscreenEnabled\) \{[\s\S]*?\n\x20{6}\}/);
+    assert.ok(disabled, '开关关闭分支必须能被定位');
+    assert.match(
+      disabled[0],
+      /reportHiddenPets\(\[\]\)/,
+      '放回窗口后必须显式上报空集合（return 会跳过轮询末尾的上报）',
+    );
+  });
+
+  test('解冻定时器按 win.id 跟踪：新冻结必须取消未触发的旧解冻', () => {
+    assert.match(main, /freezeReleaseTimers/, '解冻定时器必须被跟踪（同 fadeTimers 的模式）');
+    const sched = main.match(/function scheduleFreezeRelease\(win\) \{[\s\S]*?\n\}/);
+    assert.ok(sched, 'scheduleFreezeRelease 必须能被定位');
+    assert.match(sched[0], /cancelFreezeRelease\(win\)/, '新解冻排程前必须先取消旧的');
+    // 取消必须挂在 sendFreeze(win, true) 的冻结路径上：覆盖所有冻结入口
+    const send = main.match(/function sendFreeze\(win, frozen\) \{[\s\S]*?\n\}/);
+    assert.ok(send, 'sendFreeze 必须能被定位');
+    assert.match(send[0], /if \(frozen === true\) cancelFreezeRelease\(win\)/, '冻结路径必须先撤未触发的解冻');
+  });
+
+  test('上报失败必须回滚快照，下一拍重发（包括清空失败的场景）', () => {
+    const fn = main.match(/function reportHiddenPets[\s\S]*?\n\}/);
+    assert.ok(fn, 'reportHiddenPets 必须能被定位');
+    assert.match(fn[0], /lastReportedHidden = /, 'catch 里必须回滚快照');
+    // 回滚值不得是 ''（那会被「当前集合也是空」的下一拍短路掉，清空失败就永远不重试）
+    const rollback = fn[0].match(/lastReportedHidden = ([^;]+);/g);
+    assert.ok(rollback && rollback.length >= 2, '快照必须有初始赋值与失败回滚两处');
+    const catchBody = fn[0].match(/\.catch\(\(e\) => \{[\s\S]*?\n\x20{2}\}\)/)?.[0] ?? '';
+    assert.match(catchBody, /lastReportedHidden = /, 'catch 里必须回滚快照');
+    // 哨兵必须带 NUL 前缀（\u0000）：petId 已禁控制字符，join(',') 的合法 key 永不可能含它，
+    // 回滚值因此必然不等于当前 key——包括清空（key === ''）失败的场景也能在下一拍重发。
+    assert.match(catchBody, /lastReportedHidden = '\\u0000failed';/, '回滚必须是必然不等于任何合法 key 的哨兵值');
+  });
+});

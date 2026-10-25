@@ -67,6 +67,19 @@ describe('desktop/tray.mjs —— 宿主托盘接线', () => {
     assert.match(source, /loginItem\.setEnabled\(/);
   });
 
+  test('全屏隐藏开关：写配置必须读响应体，ok===false 时不乐观翻勾', () => {
+    const at = source.indexOf("case 'set-hide-on-fullscreen'");
+    assert.ok(at > 0, '必须处理 set-hide-on-fullscreen 动作');
+    const branch = source.slice(at, source.indexOf("case 'open-data-dir'", at));
+    assert.match(branch, /resp\.json\(\)/, '必须读响应体（宿主业务失败回 200 + {ok:false}）');
+    assert.match(branch, /body\.ok === false/, 'ok===false 时不得翻勾');
+    assert.match(branch, /if \(ok\) state\.hideOnFullscreen = effect\.enabled;/, '只有业务成功才本地翻勾');
+  });
+
+  test('hideOnFullscreen 首次配置加载前是未知态（null），顺着缺省按 true 的既有语义走', () => {
+    assert.match(source, /hideOnFullscreen: null,/, 'state 初值必须是 null（未知），不能硬编码 true');
+  });
+
   test('退出：先销毁托盘，再走 handle.shutdown，完成后 app.exit(0)', () => {
     const quitAt = source.indexOf("case 'quit'");
     assert.ok(quitAt > 0, '必须处理 quit 动作');

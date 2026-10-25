@@ -66,3 +66,41 @@ describe('工单 05 —— 全屏隐藏期间冻结渲染端自发行为', () =>
     assert.doesNotMatch(fn[0], /setInteractive|inputBusy|setInputRegions/, '冻结绝不改点击穿透状态');
   });
 });
+
+describe('工单 05 code-review 修复 —— 冻结/解冻的三个边界', () => {
+  const sprite = readSource(helper + 'sprite.js');
+
+  test('解冻不顶掉正在播的命令动画：playback 非空时不 playOnce idle', () => {
+    // spec：/anim、/whisper 气泡动画在冻结期间照常，恢复后要能看到——applyDeskFreeze(false)
+    // 若无条件 playOnce(idle) 会把它们换源顶掉。前台有 playback 时必须让位，播完由
+    // handleEnded 自然接回随机链。
+    const fn = sprite.match(/applyDeskFreeze\(next\)\x20\{[\s\S]*?\n\x20\x20\}/);
+    assert.ok(fn, 'applyDeskFreeze 函数必须存在');
+    const unfreeze = fn[0].slice(fn[0].indexOf('全屏冻结解除'));
+    assert.match(unfreeze, /if \(this\.playback\) return;/, '解冻路径必须先让位给正在播的 playback');
+  });
+
+  test('冻结定格时正在飞的 pos 必须写回 customPos（否则恢复后瞬移回旧位置）', () => {
+    const fn = sprite.match(/applyDeskFreeze\(next\)\x20\{[\s\S]*?\n\x20\x20\}/);
+    assert.ok(fn, 'applyDeskFreeze 函数必须存在');
+    const block = fn[0].slice(fn[0].indexOf('if (next) {'), fn[0].indexOf('全屏冻结生效'));
+    assert.match(block, /if \(this\.throwState\)/, '冻结时必须检查是否正在飞');
+    assert.match(
+      block,
+      /customPos = \{ rx: \(this\.pos\.x \+ this\.halfW\) \/ VIEW\.w, ry: \(this\.pos\.y \+ this\.halfH\) \/ VIEW\.h \}/,
+      '定格点必须写回 customPos（与 startThrow 落定分支同一写法）',
+    );
+  });
+
+  test('隐藏期间动画链不推进：handleEnded 与 resumeWorkStatusAnim 都有 deskFrozen 门禁', () => {
+    // 回执照报（reportPlayback）在门禁之前是现状、必须保持——门禁只拦「换源推进」。
+    const ended = sprite.match(/handleEnded\(\)\x20\{[\s\S]*?\n\x20\x20\}/);
+    assert.ok(ended, 'handleEnded 必须存在');
+    const endedGuardAt = ended[0].indexOf('if (this.deskFrozen) return;');
+    const reportAt = ended[0].indexOf("reportPlayback(done, 'ended')");
+    assert.ok(endedGuardAt > reportAt, 'handleEnded 的 deskFrozen 门禁必须在回执照报之后');
+    const resume = sprite.match(/resumeWorkStatusAnim\(\)\x20\{[\s\S]*?\n\x20\x20\}/);
+    assert.ok(resume, 'resumeWorkStatusAnim 必须存在');
+    assert.match(resume[0], /if \(this\.deskFrozen\) return false;/, 'resumeWorkStatusAnim 必须有 deskFrozen 门禁');
+  });
+});

@@ -124,7 +124,10 @@ export async function startAppTray(options = {}) {
     config: undefined,
     settingsUrl: await currentSettingsUrl(home),
     autostart: readAutostart(loginItem),
-    hideOnFullscreen: true,
+    // null = 首次配置加载前「未知」。trayMenuScenario / tray-menu 模板对「非 false」都按内置
+    // 默认（开启）勾上；dispatchTrayAction 对缺省也按 true 翻转——所以 null 顺着既有缺省
+    // 语义走即可，不需要给 tray-actions 加第三态。
+    hideOnFullscreen: null,
   };
   let template = [];
   let menu = null;
@@ -215,7 +218,8 @@ export async function startAppTray(options = {}) {
       }
       state.config = config;
       state.autostart = readAutostart(loginItem);
-      // 全屏隐藏开关是全局默认组字段：取 main 条目顶层值（成品聚合已合并内置默认，必有布尔）
+      // 全屏隐藏开关是全局默认组字段：取 main 条目顶层值（成品聚合已合并内置默认，必有布尔）；
+      // 聚合里真没有时也视为已知（内置默认 true），只有「首次加载前」才是 null（未知）
       state.hideOnFullscreen =
         state.config && state.config.main && typeof state.config.main.hideOnFullscreen === 'boolean'
           ? state.config.main.hideOnFullscreen
@@ -280,12 +284,23 @@ export async function startAppTray(options = {}) {
         state.autostart = readAutostart(loginItem);
         rebuild();
         break;
-      case 'set-hide-on-fullscreen':
-        // 只写配置：响应成功即本地乐观翻勾（1s 轮询随后会从盘上对齐）；绝不重启桌面壳
-        await hostRequest(handle, 'POST', HIDE_ON_FULLSCREEN_PATH, { enabled: effect.enabled });
-        state.hideOnFullscreen = effect.enabled;
+      case 'set-hide-on-fullscreen': {
+        // 只写配置（1s 轮询随后会从盘上对齐）；绝不重启桌面壳。
+        // 宿主业务失败回 200 + {ok:false}：只看 HTTP 状态码会乐观翻错勾，必须读响应体，
+        // 失败时不翻勾、只强制刷新一次让菜单勾选与盘上配置对齐（不报错弹窗）。
+        const resp = await hostRequest(handle, 'POST', HIDE_ON_FULLSCREEN_PATH, { enabled: effect.enabled });
+        let ok = true;
+        try {
+          const body = await resp.json();
+          if (body && body.ok === false) ok = false;
+        } catch {
+          /* 响应体不是 JSON：HTTP 已通过，按成功处理 */
+        }
+        if (ok) state.hideOnFullscreen = effect.enabled;
+        await refresh({ force: true });
         rebuild();
         break;
+      }
       case 'open-data-dir': {
         // 数据目录固定为 <DSH_HOME>/dsh-pet（不是 %APPDATA%）
         const failure = await shell.openPath(petDataDir(home));

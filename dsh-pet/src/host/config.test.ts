@@ -911,6 +911,8 @@ describe('文件宠物条目 —— 全局默认（用户层作基座）+ 种类
         whisperModel: { provider: 'p1', model: 'm1' },
         chatModel: { provider: 'p2', model: 'm2' },
         eventsRefreshSec: { balance: 900, whisper: 60 },
+        hideOnFullscreen: false,
+        font: { family: 'youyuan', size: 24, followPet: true },
       },
       pack: PACK,
     });
@@ -925,6 +927,8 @@ describe('文件宠物条目 —— 全局默认（用户层作基座）+ 种类
     assert.deepEqual(pig.whisperModel, { provider: 'p1', model: 'm1' });
     assert.deepEqual(pig.chatModel, { provider: 'p2', model: 'm2' });
     assert.deepEqual(pig.eventsRefreshSec, { balance: 900, whisper: 60 });
+    assert.equal(pig.hideOnFullscreen, false, 'hideOnFullscreen 应继承用户层（工单 07 新增全局默认）');
+    assert.deepEqual(pig.font, { family: 'youyuan', size: 24, followPet: true }, 'font 应继承用户层');
     // 对照：main 条目一直就是用户层（行为不变）
     assert.equal(rec(out.main.physics).gravity, 999);
     assert.equal(out.main.chatMemoryRounds, 9);
