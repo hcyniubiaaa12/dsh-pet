@@ -152,6 +152,17 @@ if (window.petBridge && window.petBridge.onDisplays) {
   });
 }
 
+// 全屏冻结（工单 05）：窗口因全屏隐藏 → { frozen: true }；恢复且静置一秒满 → { frozen: false }。
+// 渲染端背景节流已关（setBackgroundThrottling: false），「窗口藏了动画自己会停」不成立，
+// 冻结必须由这条显式通知驱动。分发到每只 sprite（本窗口只装一只，按既有 for-of 范式写）：
+// 冻结只拦自发行为（随机链/漫游/物理），命令触发的说话与动画照常，穿透状态不动。
+if (window.petBridge && window.petBridge.onFullscreenFreeze) {
+  window.petBridge.onFullscreenFreeze((payload) => {
+    const next = !!(payload && payload.frozen);
+    for (const s of sprites) s.applyDeskFreeze(next);
+  });
+}
+
 // 窗口内容区尺寸异常时按当前位置重新规整。
 // 守卫：拖拽/飞行/漫游中**绝不**重设位置——这三种状态下位置由输入或物理驱动，而 position()
 // 会把宠物拉回 customPos（上一次的落点）。跨屏时 Windows 会因 WM_DPICHANGED 主动改窗口尺寸，
