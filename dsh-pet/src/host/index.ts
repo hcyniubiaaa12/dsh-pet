@@ -119,7 +119,7 @@ import { decideAnim } from './anim';
 import { LockStore } from './lock';
 import { decidePosition, decideThrow, positionLeafData } from './motion-cue';
 import { parsePlaybackPath, parseWaitQuery, PlaybackStore } from './playback';
-import { PoseStore, normalizePoseInput } from './pose';
+import { PoseStore, normalizePoseInput, poseResponseBody } from './pose';
 import { SURFACE_TEXT, displayCovers, normalizeSurface, type Surface } from './surface';
 import {
   findPetInstance,
@@ -1886,7 +1886,9 @@ export function apply(ctx: any): void {
             },
           };
         }
-        return { kind: 'json', status: 200, obj: { ok: true, petId: who.petId, ...snap } };
+        // 工单 10：成功响应带 `hidden`（是否因全屏隐藏）——数据源是宿主侧瞬时隐藏集合，
+        // 只加字段，既有键（ok / petId / x / y / facing / updatedAt）形状与语义不动。见 ./pose。
+        return { kind: 'json', status: 200, obj: poseResponseBody(who.petId, snap, hiddenPets.has(who.petId)) };
       } catch (e) {
         // 配置读取失败等（安装损坏）→ 显式失败，不静默（与其他端点同一口径）
         return {

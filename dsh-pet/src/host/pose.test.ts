@@ -11,7 +11,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PoseStore, normalizePoseInput } from './pose.ts';
+import { PoseStore, normalizePoseInput, poseResponseBody } from './pose.ts';
 
 describe('normalizePoseInput —— 上报原值收窄', () => {
   test('合法 → 原样收窄', () => {
@@ -77,5 +77,45 @@ describe('PoseStore —— 快照覆盖', () => {
     assert.equal(store.count(), 2);
     assert.equal(store.get('a')?.facing, 'left');
     assert.equal(store.get('b')?.facing, 'right');
+  });
+});
+
+describe('poseResponseBody —— GET /pose 的成功响应体（工单 10：hidden 字段）', () => {
+  const snap = { x: 0.25, y: 0.75, facing: 'left' as const, updatedAt: 1234 };
+
+  test('未隐藏 → hidden:false，既有字段原样保留（形状与值都不动）', () => {
+    const body = poseResponseBody('main', snap, false);
+    // 既有字段深比对：工单只加字段，不允许任何既有键变形 / 丢值
+    assert.deepEqual(body, {
+      ok: true,
+      petId: 'main',
+      x: 0.25,
+      y: 0.75,
+      facing: 'left',
+      updatedAt: 1234,
+      hidden: false,
+    });
+  });
+
+  test('在隐藏集合内 → hidden:true，既有字段不受影响', () => {
+    const body = poseResponseBody('main', snap, true);
+    assert.equal(body.hidden, true);
+    // 除 hidden 外与未隐藏的响应体逐字段一致：hidden 是纯附加位
+    const withoutHidden = (o: Record<string, unknown>): Record<string, unknown> => {
+      const clone = { ...o };
+      delete clone.hidden;
+      return clone;
+    };
+    assert.deepEqual(withoutHidden(body), withoutHidden(poseResponseBody('main', snap, false)));
+  });
+
+  test('多只宠物各自独立：集合只含 A 时 B 仍 hidden:false', () => {
+    assert.equal(poseResponseBody('b', snap, false).hidden, false);
+    assert.equal(poseResponseBody('a', snap, true).hidden, true);
+  });
+
+  test('hidden 恒为布尔（不是 undefined / 0 / 1）', () => {
+    assert.equal(typeof poseResponseBody('main', snap, false).hidden, 'boolean');
+    assert.equal(typeof poseResponseBody('main', snap, true).hidden, 'boolean');
   });
 });

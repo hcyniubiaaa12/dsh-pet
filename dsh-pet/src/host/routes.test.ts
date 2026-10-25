@@ -14,9 +14,10 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { Writable } from 'node:stream';
 
 import { apply } from './index.ts';
@@ -775,5 +776,22 @@ describe('/hidden-pets —— 桌面壳上报隐藏集合（ticket 06，瞬时�
     assert.equal(parsed.accepted, 2);
     const empty = await call('/dsh-pet-7340/hidden-pets', 'POST', JSON.stringify({ petIds: [] }));
     assert.equal((JSON.parse(empty.body) as { ok: boolean; accepted: number }).accepted, 0);
+  });
+});
+
+describe('GET /pose 的 hidden 字段 —— 与隐藏集合接线（工单 10，源码守卫）', () => {
+  // 成功路径在本文件测不了（源码形态下 PACKAGE_ROOT 解析为 <pkg>/src，readAllConfig 必然抛错，
+  // 见 /broadcast 的覆盖范围说明）；响应体的字段级契约由 pose.test.ts 的 poseResponseBody 单测覆盖。
+  // 这里只钉**接线**本身：路由层必须用 hiddenPets.has 把字段喂进去——防止以后重构时悄悄断开。
+  test('成功响应走 poseResponseBody，hidden 取自 hiddenPets.has(petId)', () => {
+    const main = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+    assert.match(main, /poseResponseBody\(who\.petId,\s*snap,\s*hiddenPets\.has\(who\.petId\)\)/);
+  });
+
+  test('请求契约不动：/pose 依旧不走 surface 校验（requirePet 不带 surface 选项）', () => {
+    const main = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+    const poseBlock = main.slice(main.indexOf("rest === 'pose'"), main.indexOf("rest === 'playback'"));
+    assert.ok(poseBlock.includes('poseResponseBody'), '守卫应切在 /pose 块内');
+    assert.doesNotMatch(poseBlock, /surface:\s*true/, 'hidden 字段不得顺带引入 surface 校验');
   });
 });

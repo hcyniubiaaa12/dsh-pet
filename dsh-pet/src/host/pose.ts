@@ -35,6 +35,18 @@ export interface PoseSnapshot {
 export type PoseInput = { x: number; y: number; facing: PoseFacing };
 
 /**
+ * `GET /pose` 的成功响应体（工单 10）：快照浅展开 + `ok` / `petId` + `hidden`。
+ *
+ * `hidden` 表达「该宠物当前是否因全屏而隐藏」（spec J 节）：第三方读实况时若没有这个字段，
+ * 会拿到「坐标在更新、却看不见窗口也点不到」的矛盾信息。数据源是宿主侧的瞬时隐藏集合
+ * （./hidden-pets），由路由层用 `hiddenPets.has(petId)` 算好传进来——本函数只负责拼装，
+ * 保持纯函数可单测。只加字段：既有键的形状与语义一律不动。
+ */
+export function poseResponseBody(petId: string, snap: PoseSnapshot, hidden: boolean): Record<string, unknown> {
+  return { ok: true, petId, ...snap, hidden };
+}
+
+/**
  * 收窄渲染端上报的 `{ x, y, facing }`。
  *
  * 与 `/position` 的"越界夹取"不同，这里**不做范围夹取**：实况是"报什么就是什么"——宠物被拖到
