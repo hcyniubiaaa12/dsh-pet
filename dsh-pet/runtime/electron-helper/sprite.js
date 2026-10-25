@@ -147,6 +147,9 @@ class PetSprite {
     //   光标移到输入框（不在身体命中区）就会被 onMouseMove 翻回穿透，点击全被透传）
     this.chatClose = null;
     this.chatOpen = false;
+    // 对话弹窗里的未发送文本（工单 04）：inputBusy 的 chat 分支要求「开着**且有文字**」——
+    // 只是点开了空弹窗不该拦住全屏自动隐藏；文字随 onInput 实时跟进，清空/发送后恢复自动判定。
+    this.chatText = '';
 
     // DOM：sprite 钉在窗口内 (margin.l, margin.t)；宠物"位置"= sprite 位置，窗口随余量外扩
     this.el = document.createElement('div');
@@ -1329,7 +1332,8 @@ class PetSprite {
   /**
    * 本窗口是否**必须保持可交互**（= "我正在用这个窗口的鼠标输入"）。
    *
-   * 三个来源：拖拽中 / 右键菜单开着 / 对话弹窗开着——它们都是"窗口内的 DOM 或事件链正在被使用"，
+   * 三个来源：拖拽中 / 右键菜单开着 / 对话弹窗开着**且有未发送文本**（工单 04：空弹窗不算忙，
+   * 不拦全屏自动隐藏）——它们都是"窗口内的 DOM 或事件链正在被使用"，
    * 而它们的输入全部来自**窗口级鼠标事件**（pointermove/pointerup/click）：窗口一旦变回穿透，
    * 输入链就断了（拖拽会定格在最后一次采样上，松手也没人报 pointerup → 宠物按旧速度飞出去）。
    *
@@ -1337,7 +1341,7 @@ class PetSprite {
    * 位移分不清"拖拽跟手"和"漫游/抛掷"）。同时上报控件矩形：菜单/聊天框外的透明区域继续穿透。
    */
   inputBusy() {
-    return this.dragState.active || this.menuOpen || this.chatOpen;
+    return this.dragState.active || this.menuOpen || (this.chatOpen && this.chatText.length > 0);
   }
 
   /**
@@ -1721,9 +1725,15 @@ class PetSprite {
         // 发送成功：回复已写进 S → 版本号变 → 挂着的长轮询立刻返回并弹气泡（0 延迟）
         console.info('[dsh-pet] 对话已发送 pet=' + this.pet.id);
       },
+      // 工单 04：未发送文本实时跟进——打到第一个字就算忙，清空/发送即恢复自动隐藏判定
+      onInput: (text) => {
+        this.chatText = text;
+        this.syncInputBusy();
+      },
       onClose: () => {
         this.chatClose = null;
         this.chatOpen = false;
+        this.chatText = ''; // 弹窗关了：未发送文本一并作废（下次打开是空弹窗，不拦隐藏）
         window.__dshPetDebug.chatOpen = false;
         this.syncInputBusy(); // 弹窗关：交还常规判定（菜单还开着的话仍保持忙，见 inputBusy）
         if (!this.menuOpen) this.setInteractive(false); // 弹窗关了且无菜单：恢复命中区穿透

@@ -556,6 +556,13 @@ const bootSuppressed = new Set();
 /** win.id → 上一次的全屏目标态：唤回压制靠「目标态发生切换」解除 */
 const lastFullscreenByWin = new Map();
 /**
+ * 唤回压制（工单 04，win.id → true）：显式唤回（/control focus）后暂停自动隐藏，
+ * 直到全屏状态发生**一次切换**（决策模块的 fullscreenChanged 路径）才解除。
+ * 模块级与上面几个状态同层——/control 处理器与轮询闭包都要读写它。
+ * 只改运行期状态，不碰持久化配置——配置值在压制期间原封不动。
+ */
+const recallHoldByWin = new Map();
+/**
  * 「全屏应用时隐藏桌宠」全局开关（配置 hideOnFullscreen，缺省 true）。
  * 模块级而不是轮询闭包里：首帧闸门（visibleGate）在窗口事件里读它——开关关掉时启动绝不能被拦下。
  * 初值 true 是安全方向（配置读回前宁可先隐藏，也不会把「本该藏」变成「闪出来」）；
@@ -860,6 +867,7 @@ function createPetWindows() {
       hiddenByFullscreen.delete(win.id);
       bootSuppressed.delete(win.id);
       lastFullscreenByWin.delete(win.id);
+      recallHoldByWin.delete(win.id);
     });
     win
       // 必须用 __dirname 拼绝对路径：loadFile 的相对路径是相对 app.getAppPath() 解析的，
@@ -948,6 +956,18 @@ function startBridgeCallback() {
           return;
         }
         const focused = focusAllWindows(windows.values());
+        // 唤回压制（工单 04）：用户显式唤回 = 想要宠物，自动隐藏让路——此后全屏中不再自动隐藏，
+        // 直到全屏状态发生一次切换（退出再进，决策模块的 fullscreenChanged 路径）才回到自动行为。
+        // 已被藏起来的窗口强制恢复显示（清掉隐藏标记，否则下一轮决策仍把它当「隐藏中」）。
+        for (const [, win] of windows) {
+          if (win.isDestroyed()) continue;
+          recallHoldByWin.set(win.id, true);
+          if (hiddenByFullscreen.get(win.id) === true || bootSuppressed.has(win.id)) {
+            hiddenByFullscreen.set(win.id, false);
+            bootSuppressed.delete(win.id);
+            showFullscreenRestore(win);
+          }
+        }
         console.error('[dsh-pet-desktop-helper] control focus: ' + focused + ' window(s)');
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, focused }));
@@ -1247,6 +1267,7 @@ app.whenReady().then(() => {
       // 首帧被闸门拦下的窗口也要算进来——它同样处于「不可见且原因来自本功能」的状态。
       if (!hideOnFullscreenEnabled) {
         fullscreenDebounce.clear();
+        recallHoldByWin.clear(); // 开关关闭 = 自动显隐整体停摆，压制自然一起解除
         for (const win of windows.values()) {
           if (win.isDestroyed()) continue;
           const suppressed = bootSuppressed.has(win.id);
@@ -1292,10 +1313,12 @@ app.whenReady().then(() => {
           fullscreen,
           hidden: hiddenByFullscreen.get(win.id) === true || suppressed,
           busy: inputBusy.get(win.id) === true,
-          // 唤回压制（工单 04）：决策模块已实现并单测覆盖，接线留给 04 号工单
-          recallHold: false,
+          // 唤回压制（工单 04）：显式唤回后暂停自动隐藏；解除只由决策模块的
+          // fullscreenChanged 路径完成（全屏状态切换），接线这里只喂状态、不自行清位。
+          recallHold: recallHoldByWin.get(win.id) === true,
           fullscreenChanged,
         });
+        recallHoldByWin.set(win.id, decision.nextRecallHold);
         if (!decision.visible) {
           if (hiddenByFullscreen.get(win.id) === true) continue;
           hiddenByFullscreen.set(win.id, true);

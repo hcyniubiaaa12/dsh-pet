@@ -112,11 +112,14 @@ export function mountChatDialog(opts: {
    *  回复本身不从这里回传——它走 S（动作端点不回数据，数据只有一个出口）。 */
   onSent?: () => void;
   onClose?: () => void;
+  /** 输入框文本变化时调用（输入/清空都算，含每次按键）。桌面端用它重报
+   *  「有未发送文本」的忙碌态（工单 04）；浏览器端可以不传。 */
+  onInput?: (text: string) => void;
   /** 弹窗允许占用的矩形（视口局部坐标）；缺省 = 整个视口 */
   clamp?: { x: number; y: number; w: number; h: number };
 }): ChatDialogMount {
   injectChatCss();
-  const { petId, surface, x, y, onSent, onClose, clamp } = opts;
+  const { petId, surface, x, y, onSent, onClose, onInput, clamp } = opts;
   const baseUrl = opts.baseUrl ?? '/dsh-pet-7340/chat';
   // `surface` 必填（宿主校验）；这个 URL 只用于 POST 发送——GET 读记忆那条路不需要它
   const withPet = baseUrl + '?pet=' + encodeURIComponent(petId) + '&surface=' + surface;
@@ -149,7 +152,10 @@ export function mountChatDialog(opts: {
     input.style.height = 'auto';
     input.style.height = Math.max(input.scrollHeight, 22) + 'px';
   };
-  input.addEventListener('input', resizeInput);
+  input.addEventListener('input', () => {
+    resizeInput();
+    if (onInput) onInput(input.value);
+  });
   resizeInput(); // 以占位符为初始宽度
 
   const err = document.createElement('div');

@@ -206,6 +206,40 @@ describe('源码守卫 —— main.js 接线（工单 03 的既有约束）', ()
   });
 });
 
+describe('源码守卫 —— main.js 唤回压制接线（工单 04）', () => {
+  const main = readSource(helper + 'main.js');
+
+  test('必须有 per-window 唤回压制状态（recallHoldByWin），且轮询不再恒传 recallHold:false', () => {
+    assert.match(main, /const recallHoldByWin = new Map\(\)/, '压制状态必须按窗口记账');
+    assert.ok(!/recallHold: false/.test(main), '轮询必须读真实压制状态，不得残留恒 false 的占位');
+  });
+
+  test('轮询必须把决策输出的压制状态喂回下一轮（nextRecallHold → recallHoldByWin）', () => {
+    const poll = main.slice(main.indexOf('decideWindowVisibility('));
+    assert.match(poll, /recallHold: recallHoldByWin\.get\(win\.id\) === true/, '压制输入必须来自真实 Map');
+    assert.match(
+      poll,
+      /recallHoldByWin\.set\(win\.id, decision\.nextRecallHold\)/,
+      '决策的 nextRecallHold 必须喂回下一轮',
+    );
+  });
+
+  test('/control 显式唤回必须设压制并强制恢复已隐藏的窗口', () => {
+    const control = main.slice(main.indexOf("'/control'"));
+    assert.ok(control.length > 0, '必须有 /control 处理分支');
+    assert.match(control, /recallHoldByWin\.set\(/, '唤回时要对该窗口开启压制');
+    assert.match(control, /showFullscreenRestore\(/, '唤回要把因全屏隐藏的窗口恢复显示');
+    assert.match(control, /hiddenByFullscreen\.set\(win\.id, false\)/, '恢复必须清掉隐藏标记（否则决策仍视为隐藏）');
+  });
+
+  test('压制状态的生命周期与其它 per-window 状态一致：开关关闭清空、窗口销毁清理', () => {
+    const disabled = main.slice(main.indexOf('if (!hideOnFullscreenEnabled)'));
+    assert.match(disabled, /recallHoldByWin\.clear\(\)/, '开关关闭时压制全部解除');
+    const closed = main.slice(main.indexOf("win.on('closed'"));
+    assert.match(closed, /recallHoldByWin\.delete\(win\.id\)/, '窗口销毁要清掉它的压制标记');
+  });
+});
+
 describe('源码守卫 —— 显隐模块零依赖', () => {
   test('fullscreen-visibility.js 不 require 任何东西、不碰运行环境', () => {
     const src = readSource(helper + 'fullscreen-visibility.js');
