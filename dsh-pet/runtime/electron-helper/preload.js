@@ -141,4 +141,9 @@ contextBridge.exposeInMainWorld('petBridge', {
   onDisplays(cb) {
     ipcRenderer.on('pet:displays', (e, geo) => cb(geo));
   },
+  // 全屏冻结（工单 05）：主进程在窗口因全屏隐藏时推 { frozen: true }，恢复静置一秒后推
+  // { frozen: false }——渲染端背景节流已关，隐藏期间自发行为必须靠这条显式通知停住。
+  onFullscreenFreeze(cb) {
+    ipcRenderer.on('pet:fullscreen-freeze', (e, payload) => cb(payload));
+  },
 });

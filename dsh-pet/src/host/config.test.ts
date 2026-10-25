@@ -531,7 +531,7 @@ describe('saveUserConfig —— 物理参数 physics（白名单 + 透传保留�
     assert.equal('physics' in (saveOnce({ pets: PETS }) ?? {}), false, '磁盘上也没有时不得凭空写入');
   });
 
-  test('请求体覆盖磁盘旧值（与四个全局开关同一语义）', () => {
+  test('请求体覆盖磁盘旧值（与五个全局开关同一语义）', () => {
     const out = saveOnce({ pets: PETS, physics: { ...PHYS, throwPower: 2 } }, { pets: PETS, physics: PHYS });
     assert.equal((out?.physics as Record<string, unknown>).throwPower, 2);
   });
@@ -583,7 +583,7 @@ describe('saveUserConfig —— 碎碎念 / 对话模型（白名单 + 透传保
     assert.equal('chatModel' in fresh, false);
   });
 
-  test('请求体覆盖磁盘旧值（与四个全局开关同一语义）', () => {
+  test('请求体覆盖磁盘旧值（与五个全局开关同一语义）', () => {
     const out = saveOnce({ pets: PETS, whisperModel: WM }, { pets: PETS, whisperModel: CM });
     assert.deepEqual(out?.whisperModel, WM);
   });
@@ -634,7 +634,7 @@ describe('saveUserConfig —— 对话历史条数 chatMemoryRounds（白名单 
     assert.equal('chatMemoryRounds' in (saveOnce({ pets: PETS }) ?? {}), false, '磁盘上也没有时不得凭空写入');
   });
 
-  test('请求体覆盖磁盘旧值（与四个全局开关同一语义）', () => {
+  test('请求体覆盖磁盘旧值（与五个全局开关同一语义）', () => {
     const out = saveOnce({ pets: PETS, chatMemoryRounds: 9 }, { pets: PETS, chatMemoryRounds: 3 });
     assert.equal(out?.chatMemoryRounds, 9, '请求体优先，不被 existing 反向覆盖');
   });
@@ -673,7 +673,7 @@ describe('saveUserConfig —— 对话配图张数上限 chatImageLimit（白名
     assert.equal('chatImageLimit' in (saveOnce({ pets: PETS }) ?? {}), false, '磁盘上也没有时不得凭空写入');
   });
 
-  test('请求体覆盖磁盘旧值（与四个全局开关同一语义）', () => {
+  test('请求体覆盖磁盘旧值（与五个全局开关同一语义）', () => {
     const out = saveOnce({ pets: PETS, chatImageLimit: 8 }, { pets: PETS, chatImageLimit: 3 });
     assert.equal(out?.chatImageLimit, 8, '请求体优先，不被 existing 反向覆盖');
   });

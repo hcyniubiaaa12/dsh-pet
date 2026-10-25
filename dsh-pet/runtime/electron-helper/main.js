@@ -545,6 +545,33 @@ function petsFromEnv() {
 /** 淡出时长（ms）。透明/分层窗口上 setOpacity 并非处处可靠 → 失败直接 hide()（spec D） */
 const OPACITY_FADE_MS = 200;
 
+/**
+ * 恢复后的静置时长（ms，工单 05 / spec D「静置一秒」）：解冻消息延到这时才发，
+ * 渲染端在这之前不做任何自发动作——用户一抬眼能确认「它回来了」。
+ */
+const FREEZE_RELEASE_DELAY_MS = 1000;
+
+/**
+ * 冻结/解冻下发（工单 05）：显隐状态机的显隐动作旁路把状态推给渲染端。
+ * 渲染端背景节流已关（setBackgroundThrottling: false），窗口藏了动画不会自己停，
+ * 自发行为的冻结必须显式通知。通道 payload：{ frozen: boolean }。
+ * 发送失败静默：通道是次要优化，显隐本身才是用户可见的主效果。
+ */
+function sendFreeze(win, frozen) {
+  try {
+    if (!win.isDestroyed()) win.webContents.send('pet:fullscreen-freeze', { frozen: frozen === true });
+  } catch (e) {
+    console.warn('[dsh-pet-desktop-helper] freeze notify failed:', String(e && e.message ? e.message : e));
+  }
+}
+
+/** 恢复后静置一秒再解冻（工单 05）：解冻消息延到这时才发，渲染端在此之前不做自发动作 */
+function scheduleFreezeRelease(win) {
+  setTimeout(() => {
+    if (!win.isDestroyed()) sendFreeze(win, false);
+  }, FREEZE_RELEASE_DELAY_MS);
+}
+
 /** win.id → true = 因全屏而隐藏。只由本状态机改（首帧闸门也读它） */
 const hiddenByFullscreen = new Map();
 /**
@@ -644,7 +671,8 @@ function fadeThenHide(win) {
  * 恢复：不抢焦点地显示 → 重钉置顶 → 提到最前 → 淡入。
  * 顺序不能反：moveTop 只在置顶带内有效（见 control-request.js 的同名注释）。
  * 淡入不可靠时（setOpacity 抛错）退化为直接可见——正确性优先于观感，与淡出同一取舍。
- * 「静置一秒 + 恢复随机链」是工单 05 的冻结通道，不在这里。
+ * 「静置一秒 + 恢复随机链」是工单 05 的冻结通道：解冻由状态机恢复分支的 scheduleFreezeRelease
+ * 延时下发（首帧被拦的窗口没有淡入可做但同样要静置，所以不在本函数里发）。
  */
 function showFullscreenRestore(win) {
   cancelFade(win);
@@ -1281,6 +1309,8 @@ app.whenReady().then(() => {
           bootSuppressed.delete(win.id);
           lastFullscreenByWin.delete(win.id);
           showFullscreenRestore(win);
+          // 开关关掉放回的窗口同样要解冻（工单 05）：静置一秒后恢复自发行为，与其余恢复路径一致
+          scheduleFreezeRelease(win);
           console.error(`[fullscreen] show ${[...windows.keys()].find((id) => windows.get(id) === win)} (disabled)`);
         }
         return;
@@ -1325,12 +1355,14 @@ app.whenReady().then(() => {
         if (!decision.visible) {
           if (hiddenByFullscreen.get(win.id) === true) continue;
           hiddenByFullscreen.set(win.id, true);
-          // 首帧被拦下的窗口从未显示过：直接标隐藏，不做淡出（没东西可淡）
+          // 首帧被拦下的窗口从未显示过：直接标隐藏，不做淡出（没东西可淡）。
+          // 冻结照发：渲染端从首帧起就不该有自发行为（spec E；工单 05）。
           if (suppressed) {
             bootSuppressed.delete(win.id);
           } else {
             fadeThenHide(win);
           }
+          sendFreeze(win, true);
           console.error(`[fullscreen] hide ${petId}`);
           continue;
         }
@@ -1339,6 +1371,9 @@ app.whenReady().then(() => {
           hiddenByFullscreen.set(win.id, false);
           bootSuppressed.delete(win.id);
           if (decision.reassertTopmost) showFullscreenRestore(win);
+          // 静置一秒后解冻（工单 05）：无论刚才走没走 showFullscreenRestore（首帧被拦的窗口
+          // 没有淡入可做，但同样要等一秒），解冻时序必须一致
+          scheduleFreezeRelease(win);
           console.error(`[fullscreen] show ${petId}`);
         }
       }
