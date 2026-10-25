@@ -142,6 +142,9 @@ class PetSprite {
     // lockTimer = 按叶子里的 expiresAt 自己到点解除（宿主侧过期是懒判的，不会推"锁没了"）。
     this.frozen = false;
     this.lockTimer = null;
+    // 全屏冻结（工单 05）：窗口因全屏被隐藏时主进程经 pet:fullscreen-freeze 推来的状态。
+    // 与占用锁 this.frozen 相互独立（两把锁各管各的来源），但门禁叠加：任一生效都不做自发行为。
+    this.deskFrozen = false;
     // 对话弹窗（shared 组件）：当前挂载的 close() 句柄 + 开启标记
     // （chatOpen 是穿透守卫：弹窗是窗口内 DOM，期间整窗保持可交互，与 menuOpen 同语义——否则
     //   光标移到输入框（不在身体命中区）就会被 onMouseMove 翻回穿透，点击全被透传）
@@ -621,6 +624,37 @@ class PetSprite {
   }
 
   /**
+   * 全屏冻结（工单 05）：窗口因全屏被隐藏 / 恢复（静置一秒后）时由 renderer.js 调用。
+   *
+   * 冻结期间被拦的**只有自发行为**，且不暂停当前动画（与占用锁 applyFreeze 不同——窗口藏了，
+   * 动画停不停在观众眼里没有区别，但恢复瞬间「定在原处、保持原动画」比「重掷随机链」更符合
+   * 「它回来了」的观感，spec E）：① 随机链（playIdle 一句判断）；② 漫游（stopMove 拦在门禁外，
+   * tryMove 也不会被随机链发车）；③ 物理（隐藏瞬间若正在飞行/漫游，就地定格，落点写回 customPos
+   * 由 startThrow 落定分支 / 手动提交）。
+   * **照常**：命令触发的说话与动画（/whisper、/anim、/broadcast 经 events.js 分发，不经这里）、
+   * 余额与工作状态气泡、系统通知。
+   * **不动**：命中判定与点击穿透状态（setInteractive / inputBusy 一概不碰，测试有守卫）。
+   */
+  applyDeskFreeze(next) {
+    if (this.deskFrozen === next) return;
+    this.deskFrozen = next;
+    const stamp = '[dsh-pet] ' + new Date().toTimeString().slice(0, 8) + ' pet=' + this.pet.id;
+    if (next) {
+      // 隐藏瞬间正在飞/正在走：就地定格——停掉自主移动与飞行，位置留在当前帧。
+      // customPos 不在 startThrow 里补：那只窗口此刻不可见，恢复后从定格点继续（原处观感）。
+      this.stopMove();
+      this.stopThrow();
+      this.stopDragFollow();
+      console.log(stamp + ' 全屏冻结生效：自发行为停（随机链/漫游/物理）');
+      return;
+    }
+    console.log(stamp + ' 全屏冻结解除：恢复随机链');
+    // 解冻即静置期满：回 idle 一次，播完由 handleEnded 接回随机链（与占用锁解冻同一恢复语义，
+    // 但不查工作状态档位——onWorkTick 一直在跑，工作动画由它自己维持）
+    if (this.animations.idle.length) this.playOnce(S.pick(this.animations.idle, this.anim));
+  }
+
+  /**
    * 锁叶子 → 冻结 / 解冻（`pets.<id>.lock`，见 events.js 的 applyLockLeaf）。
    *
    * `expiresAt` **已经过去** = 没有锁：窗口重载后才拿到一份陈旧叶子时必须这么判，不能只看 locked。
@@ -649,6 +683,9 @@ class PetSprite {
     // 才会走到），一句判断就把随机动画、随机转向、自主走位一起停住——宠物停在最后一帧，
     // 等持锁者的下一条指令（那走 /anim，不经这里）。与浏览器 pickNext 同一处判断。
     if (this.frozen) return;
+    // 全屏冻结（工单 05）：窗口因全屏被隐藏时不掷骰——随机链、随机转向、自主走位同上一起停住。
+    // 恢复后主进程静置一秒才推解冻，所以「静置一秒后才恢复自发行为」由解冻时序保证，无需另加计时。
+    if (this.deskFrozen) return;
     this.stopMove();
     const { animations, animationWeights } = { animations: this.animations, animationWeights: this.weights };
     const roll = Math.random();

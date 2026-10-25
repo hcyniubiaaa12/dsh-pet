@@ -195,7 +195,7 @@ export const zh = {
   // 卡片标题 + 卡片级说明（说明都进问号，不再占一行小字）
   petCardTitle: '宠物配置',
   petCardHint:
-    '每只宠物独立配置：名字 / 大小 / 显示位置 / 位置 / 偏移 / 四个功能开关。改完点最下面的「保存」即时生效。',
+    '每只宠物独立配置：名字 / 大小 / 显示位置 / 位置 / 偏移 / 四个功能开关（余额 / 碎碎念 / 工作状态 / 宠物固定）。改完点最下面的「保存」即时生效。',
   globalTitle: '全局开关',
   globalHint:
     '所有宠物共用（pet pack 可在自己种类文件里单独覆盖）。这几个开关只改本地状态，随「保存」整包写入用户配置（不做即时写入）；系统通知在保存后即时重读，无需刷新页面。',
@@ -369,7 +369,7 @@ export const en = {
   // Card titles + card-level help (all hints move into the "?" bubble)
   petCardTitle: 'Pet',
   petCardHint:
-    'Per-pet settings: name / size / display / corner / offsets / the four feature switches. Click "Save" at the bottom to apply instantly.',
+    'Per-pet settings: name / size / display / corner / offsets / the four per-pet feature switches (balance / whisper / work status / fixed). Click "Save" at the bottom to apply instantly.',
   globalTitle: 'Global switches',
   globalHint:
     'Shared by every pet (a pet pack may override them in its own kind file). These switches only change local state and are written to the user config on "Save" (never written immediately); system notifications re-read right after saving, no page refresh needed.',
@@ -1019,19 +1019,19 @@ export function makePetConfigSection(rt: {
     // 默认 true = 内置默认（assets/config.jsonc），加载效应会用成品 main.hideOnFullscreen 覆盖。
     const [hideFullscreen, setHideFullscreen] = useState(true);
     // 物理参数（全局：拖拽抛掷手感，写用户级配置 main-config.jsonc 的 physics 段）。
-    // 与四个开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
+    // 与五个开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
     // 初值仅作占位；成品配置加载成功后才允许编辑和保存。
     const [physics, setPhysics] = useState<PhysicsParams>({ ...DEFAULT_PHYSICS });
     // 字体（全局默认：字体种类 / 字号 / 是否随宠物大小缩放，写用户级配置的 font 段）。
-    // 与四个全局开关 / physics 同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
+    // 与五个全局开关 / physics 同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
     // 初值仅作占位；成品配置加载成功后才允许编辑和保存。
     const [font, setFont] = useState<FontConfig>({ ...DEFAULT_FONT });
     // AI 模型（条目级：碎碎念 / 对话各自的服务商 + 模型，两者都留空 = 跟随当前对话的模型）。
-    // 与四个全局开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
+    // 与五个全局开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
     const [whisperModel, setWhisperModel] = useState<ModelSelection>({ provider: '', model: '' });
     const [chatModel, setChatModel] = useState<ModelSelection>({ provider: '', model: '' });
     // 对话历史条数（全局默认：每次对话请求带多少历史进上下文，写用户级配置的 chatMemoryRounds）。
-    // 与两个模型 / 四个开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
+    // 与两个模型 / 五个开关同一套语义：只改本地状态，随「保存」整包写入（不做即时写入）。
     // 初值 5 = 内置默认（assets/config.jsonc）；下面的加载效应会用成品 main.chatMemoryRounds 覆盖。
     const [chatMemory, setChatMemory] = useState(5);
     // 对话配图张数上限（全局默认：对话时发给模型的表情包清单最多几张，写用户级配置的 chatImageLimit）。
@@ -1507,7 +1507,7 @@ export function makePetConfigSection(rt: {
           ],
         }),
 
-        // 选中宠物配置卡：第 1 行 名字/大小/显示位置、第 2 行 位置/偏移、第 3 行 四个开关
+        // 选中宠物配置卡：第 1 行 名字/大小/显示位置、第 2 行 位置/偏移、第 3 行 四个开关（实例级：余额 / 碎碎念 / 工作状态 / 宠物固定）
         cur
           ? h('div', {
               className: 'dsh-pet-cfg__card',
@@ -1650,7 +1650,7 @@ export function makePetConfigSection(rt: {
               children: t('emptyPets'),
             }),
 
-        // 全局开关卡（需求 4：四个开关一行；工单 08 起五个一行）。
+        // 全局开关卡（五个开关一行：工单 08 起从四个扩为五个）。
         // 五个开关行为**一致**：切换只改本地状态，随「保存」整包写入用户级配置——不做即时写入
         // （即时写盘会触发宿主重启桌面 Helper，把全部桌面宠物窗口重建一遍）。系统通知额外在保存后
         // 由 save() 调 reloadNotifications() 让通知引擎即时重读。
@@ -1724,7 +1724,7 @@ export function makePetConfigSection(rt: {
           ],
         }),
 
-        // AI 模型与对话上下文卡（需求 5）：碎碎念 / 对话各自的服务商 + 模型，条目级——与四个开关
+        // AI 模型与对话上下文卡（需求 5）：碎碎念 / 对话各自的服务商 + 模型，条目级——与五个开关
         // 同一套语义，只改本地状态、随「保存」整包写入。host 侧生成时优先用它，失败自动回落。
         // 第二行是对话历史条数（全局默认）：与两个模型同属「对话的上下文 / token 成本」，
         // 所以同卡而不是塞进「全局开关」（那里是布尔开关）。
@@ -1757,7 +1757,7 @@ export function makePetConfigSection(rt: {
         }),
 
         // 物理卡（需求 6）：四个数字输入一行 + 两个开关一行。
-        // 与上面四个开关同一套语义（只改本地状态，随「保存」整包写入；不做即时写入）。
+        // 与上面五个开关同一套语义（只改本地状态，随「保存」整包写入；不做即时写入）。
         // 浏览器保存后即时生效；桌面端由保存触发的 Helper 重启重新读取——physics 在 sprite 构造时只读一次。
         h('div', {
           className: 'dsh-pet-cfg__card',
