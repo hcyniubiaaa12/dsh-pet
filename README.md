@@ -4,16 +4,19 @@
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-pet?label=npm&color=blue"></a>
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm monthly downloads" src="https://img.shields.io/npm/dm/dsh-pet?label=%E6%9C%88%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="total downloads" src="https://img.shields.io/npm/dt/dsh-pet?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=success"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="stars" src="https://img.shields.io/github/stars/PC2005-cloud/dsh-pet?style=social"></a>
+  <a href="https://github.com/hcyniubiaaa12/dsh-pet"><img alt="stars" src="https://img.shields.io/github/stars/hcyniubiaaa12/dsh-pet?style=social"></a>
   <a href="https://github.com/PC2005-cloud/dsh-pet/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/PC2005-cloud/dsh-pet?color=orange"></a>
   <a href="https://awesome-dsh-plugin.com"><img alt="awesome dsh plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="repo size" src="https://img.shields.io/github/repo-size/PC2005-cloud/dsh-pet"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet/issues"><img alt="issues" src="https://img.shields.io/github/issues/PC2005-cloud/dsh-pet"></a>
+  <a href="https://github.com/hcyniubiaaa12/dsh-pet"><img alt="repo size" src="https://img.shields.io/github/repo-size/hcyniubiaaa12/dsh-pet"></a>
+  <a href="https://github.com/hcyniubiaaa12/dsh-pet/issues"><img alt="issues" src="https://img.shields.io/github/issues/hcyniubiaaa12/dsh-pet"></a>
   <img alt="platform" src="https://img.shields.io/badge/platform-DeepSeek%20Harness%20Web-8A2BE2">
   <img alt="assets" src="https://img.shields.io/badge/assets-dynamic%20animations-ff69b4">
 </p>
 
 一只住在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的桌面宠物：待机呼吸、随机动作（打瞌睡、玩魔方、吃火锅……）、左右转向、屏幕漫游、点击 Q 弹、拖拽甩抛反弹、右键菜单点播——一百余个透明动画随时无缝衔接；还能跟随 DSH 会话事件切换工作状态动画、按档位播放余额动画 + 头顶气泡、碎碎念与对话聊天、窗口失焦时弹系统通知。可多开同屏，能脱离浏览器住上**桌面**（透明置顶小窗），也能自己添加**全新宠物种类**（pet pack）。
+
+> **[!NOTE]**
+> 本仓库是 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的 **fork 本地化版本**，在此基础上做功能扩展与本地适配（如 v0.5.0 的「全屏应用时自动隐藏桌宠」）。原项目的新特性与修复能否跟进视情况而定；安装包从**本仓库**的 [Releases](https://github.com/hcyniubiaaa12/dsh-pet/releases/latest) 下载。
 
 这不是一个普通插件，而是**完整的三件套项目**：
 
@@ -72,7 +75,7 @@ dsh plugin --profile web add dsh-pet
 
 ```sh
 # ① clone 本仓库，进入插件目录
-git clone https://github.com/PC2005-cloud/dsh-pet.git
+git clone https://github.com/hcyniubiaaa12/dsh-pet.git
 cd dsh-pet/dsh-pet
 
 # ② 安装依赖
@@ -104,6 +107,7 @@ dsh plugin --profile web add file:D:/path/to/dsh-pet/dsh-pet
    ```
 
    这一步在**后台**进行，浏览器里的宠物照常可用；要等多久取决于网速（几十秒到几分钟），期间不用管它。
+
 3. **桌面端随后出现。** 解压完自动拉起桌面 Helper，同一只宠物以透明窗形式落到桌面上——**此时屏幕上一共两只**：浏览器里一只、桌面上那只，共用同一份配置与同一套动画。
 4. **想只留一只。** 两条路都行，改完即时生效：
    - **设置页**：选中该宠物 →「显示位置」下拉框 → 仅浏览器 / 仅桌面 / 两者都显示 / 都不显示；
@@ -113,7 +117,7 @@ dsh plugin --profile web add file:D:/path/to/dsh-pet/dsh-pet
 
 ## 💬 反馈与发版节奏
 
-欢迎提 [issue](https://github.com/PC2005-cloud/dsh-pet/issues) 与 PR——bug、体验问题、优化想法都行。但动手前请先翻一眼 [提交记录](https://github.com/PC2005-cloud/dsh-pet/commits/main)，确认不是已经修掉的同款问题（有些问题可能已经在 `main` 上修好了，只是还没发版）。
+欢迎提 [issue](https://github.com/hcyniubiaaa12/dsh-pet/issues) 与 PR——bug、体验问题、优化想法都行。但动手前请先翻一眼 [提交记录](https://github.com/hcyniubiaaa12/dsh-pet/commits/main)，确认不是已经修掉的同款问题（有些问题可能已经在 `main` 上修好了，只是还没发版）。原项目的问题请到 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet/issues) 反馈。
 
 - **小修不单独发版**：不影响使用的小 bug 与优化会**累计**到下一个版本一起发，避免版本更迭过于频繁。所以「`main` 上已经修了」不等于「你装的这版已经包含」——`latest` 没更新时，以 `main` 的提交记录为准。
 - **想立刻用上未发布的修复**：按上面的「从源码安装」把插件指向本地仓库即可；注意**宿主半侧**的代码改动要**重开 DSH** 才生效（浏览器半侧刷新页面即可）。
@@ -273,14 +277,15 @@ npm run build && npm run standalone   # 仓库里（先构建）
 - 会移除程序文件、开始菜单 / 桌面快捷方式、卸载注册项与开机自启项，并删除自启初始化标记 `autostart-initialized`。
 - **用户数据默认全部保留**：卸载向导有一个「选择要删除的用户数据」页，四个勾选项**默认全不勾**——不勾就一个字节都不碰，卸载只是「卸掉程序」。想彻底清理需勾选后继续，或用下面的静默参数。
 
-  | 勾选项 | 删除的目录 | 后果 |
-  |---|---|---|
-  | 对话记忆与配置 | `<DSH_HOME>\dsh-pet\` | 主宠物配置、对话记忆、宠物包（pet pack）、自定义动画与表情包（不含 API 密钥与自启标记） |
-  | AI 设置与 API 密钥 | `<DSH_HOME>\dsh-pet\standalone-ai.json` | 明文保存的 API Key，单列一项方便你在删之前意识到它是什么 |
-  | 内置 Electron 运行时（约 348 MB） | `<DSH_HOME>\electron\` | 安装版自带的 Electron，删除后不影响其它程序 |
-  | 桌面壳缓存（约 65 MB） | `%APPDATA%\dsh-pet-electron-helper\` 与 `%APPDATA%\DSH Pet\` | 桌面小窗的 Chromium 缓存与安装版宿主的本地设置 |
+  | 勾选项                            | 删除的目录                                                   | 后果                                                                                    |
+  | --------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+  | 对话记忆与配置                    | `<DSH_HOME>\dsh-pet\`                                        | 主宠物配置、对话记忆、宠物包（pet pack）、自定义动画与表情包（不含 API 密钥与自启标记） |
+  | AI 设置与 API 密钥                | `<DSH_HOME>\dsh-pet\standalone-ai.json`                      | 明文保存的 API Key，单列一项方便你在删之前意识到它是什么                                |
+  | 内置 Electron 运行时（约 348 MB） | `<DSH_HOME>\electron\`                                       | 安装版自带的 Electron，删除后不影响其它程序                                             |
+  | 桌面壳缓存（约 65 MB）            | `%APPDATA%\dsh-pet-electron-helper\` 与 `%APPDATA%\DSH Pet\` | 桌面小窗的 Chromium 缓存与安装版宿主的本地设置                                          |
 
   `<DSH_HOME>` 默认是 `%USERPROFILE%\.dsh`；设置过 `DSH_HOME` 时以**执行卸载那一刻**的环境变量为准。
+
 - **静默卸载**（命令行加 `/S`）没有勾选页，默认同样全保留；`/S /PURGE`（或 `--delete-app-data`，两者同义）跳过勾选页直接删掉上表全部四项。例如：
 
   ```sh
@@ -288,6 +293,7 @@ npm run build && npm run standalone   # 仓库里（先构建）
   ```
 
   注意 `/PURGE`（与 `--delete-app-data`）**只在静默（`/S`）场景使用**：卸载器解析到这两个开关时会无条件把四项勾选覆盖成「全删」——交互式卸载带 `/PURGE` 启动的话，向导页上的勾选状态会被覆盖，四项全部执行。交互式卸载请以页面勾选为准，不要带这两个开关。
+
 - 多应用共享的 `%LOCALAPPDATA%\electron\Cache` 永不删除。
 - 因为 `autostart-initialized` 被卸载删除，**重装后恢复「默认开启自启」**——之前在托盘里主动关掉过自启的选择不会保留（升级安装不受影响，见下节）。
 
@@ -399,26 +405,54 @@ $DSH_HOME/dsh-pet/
   "notificationsEnabled": true,
   "pets": [
     {
-      "id": "pig1",              // 实例 id（可多只；不必等于文件名前缀）
+      "id": "pig1", // 实例 id（可多只；不必等于文件名前缀）
       "size": 420,
       "balanceEnabled": true,
-      "display": "both",        // web / desktop / both / none
-      "position": { "corner": "top-right", "marginX": 24, "marginY": 100 }
+      "display": "both", // web / desktop / both / none
+      "position": { "corner": "top-right", "marginX": 24, "marginY": 100 },
     },
-    { "id": "pig2", "size": 360, "balanceEnabled": false, "display": "web", "position": { "corner": "top-left", "marginX": 24, "marginY": 100 } }
+    {
+      "id": "pig2",
+      "size": 360,
+      "balanceEnabled": false,
+      "display": "web",
+      "position": { "corner": "top-left", "marginX": 24, "marginY": 100 },
+    },
   ],
   "animations": {
-    "idle": ["待机"], "turn": [], "drag": [], "clicks": ["打滚"],
-    "moves": { "default": { "minDist": 80, "maxDist": 360, "margin": 20, "leadSec": 2, "tailSec": 2 }, "actions": [] },
+    "idle": ["待机"],
+    "turn": [],
+    "drag": [],
+    "clicks": ["打滚"],
+    "moves": {
+      "default": {
+        "minDist": 80,
+        "maxDist": 360,
+        "margin": 20,
+        "leadSec": 2,
+        "tailSec": 2,
+      },
+      "actions": [],
+    },
     "categories": [],
-    "events": { "balance": ["余额-钱袋满溢", "余额-金袋叮当", "余额-钱袋如常", "余额-数金皱眉", "余额-袋空如洗", "余额-分文不剩"] }
+    "events": {
+      "balance": [
+        "余额-钱袋满溢",
+        "余额-金袋叮当",
+        "余额-钱袋如常",
+        "余额-数金皱眉",
+        "余额-袋空如洗",
+        "余额-分文不剩",
+      ],
+    },
   },
   "animationWeights": { "idle": 80, "turn": 0, "move": 0 },
-  "eventsRefreshSec": { "balance": 1800 }
+  "eventsRefreshSec": { "balance": 1800 },
 }
 ```
 
 规则（与主宠物**严格隔离**，绝不混用）：
+
 - **素材只查自己的**：素材目录名 = 文件名前缀（`pet/pig-config.json` → `pet/pig-animation/`），该种类所有实例共用；动画 URL `/thumb/<前缀>/<名>.webm`，查不到即 404——绝不落到 `main-animation` 或包内素材
 - **动画池不回落全局**：`animations` / `animationWeights` 必须写全（缺失即配置错误）
 - 与主配置同构的约束：`pets` 每只字段完整合法、数组内 id 唯一、`animations` / `animationWeights` 结构校验同一套规则；`notificationsEnabled` / `eventsRefreshSec` 是全局属性，不归宠物文件管（写了忽略、不写不报错）
