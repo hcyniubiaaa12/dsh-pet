@@ -7,7 +7,7 @@
 //   · 全局默认（本文件是默认值；用户在 main-config.jsonc 里写一次就对**所有宠物**生效，
 //     含 pet/<名>-config.json 定义的种类；种类文件自己写了则覆盖自己那份）：
 //     physics / font / confineToScreen / hideOnFullscreen / whisperImageEnabled / chatImageEnabled /
-//     chatMemoryRounds / whisperModel / chatModel / eventsRefreshSec
+//     chatImageLimit / chatMemoryRounds / whisperModel / chatModel / eventsRefreshSec
 //   · 条目级（每个条目一份：main 一份、每个种类各一份；种类文件顶层可覆盖）：
 //     whisperPrompt / memes / workStatusTexts / animations / animationWeights
 //   · 只读 main（写了也只认 main 条目那份）：notificationsEnabled / eventsRefreshSec.balance

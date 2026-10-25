@@ -22,7 +22,7 @@
  *     （如余额周期读不到就按 1800、碎碎念按 300）；
  *   - **显式写了但非法**（类型/结构/白名单外）→ 告警 + 填内置默认值
  *     （同一 文件+字段 进程内只告警一次，避免每请求刷屏；保证返回绝不出现残缺/非法值）；
- *   - **例外：全局默认**（GLOBAL_DEFAULT_KEYS 那 10 个「用户级成本/偏好/环境/节奏」字段）——
+ *   - **例外：全局默认**（GLOBAL_DEFAULT_KEYS 那 11 个「用户级成本/偏好/环境/节奏」字段）——
  *     文件宠物条目的基座取**用户层**（main-config.jsonc）而不是内置默认，即"设置页改一次，
  *     所有宠物都生效"；种类文件仍可在自己顶层覆盖（写了就用自己那份）；
  *   - 身份字段例外（无默认可填）：id 必须存在、全局唯一（缺失/重复/非法/冲突 →
@@ -734,7 +734,7 @@ export function saveUserConfig(
     provider: String(v.provider).trim(),
     model: String(v.model).trim(),
   });
-  // 白名单可编辑字段：pets 来自请求体，其余（四个全局开关 / physics / 两个模型 /
+  // 白名单可编辑字段：pets 来自请求体，其余（五个全局开关 / physics / 两个模型 /
   // 对话历史条数）同样只在请求体**真的传了**时才写（未传则走下面的透传保留，不凭空造值）
   const outConfig: { pets: unknown[]; [key: string]: unknown } = { pets: out };
   if (ne !== undefined) outConfig.notificationsEnabled = ne;
