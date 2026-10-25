@@ -354,4 +354,20 @@ describe('守卫：渲染端的输入租约必须在位（helper 随包发行，
     assert.ok(/setInputBusy\(busy\)/.test(preload), 'preload 必须有 setInputBusy');
     assert.ok(/'pet:input-busy'/.test(preload), 'IPC 频道名必须与 main.js 一致');
   });
+
+  test('对话弹窗只在「开着且有未发送文本」时算忙（工单 04：空弹窗不拦自动隐藏）', () => {
+    // inputBusy() 的 chat 分支必须带文本条件；只是开着但没写字的弹窗不该挡住隐藏。
+    // 文本变化时必须重新上报（input 事件 → syncInputBusy），清空后下一拍恢复自动判定。
+    const m = /inputBusy\(\)\s*\{([\s\S]*?)\n {2}\}/.exec(sprite);
+    assert.ok(m, 'sprite.js 里找不到 inputBusy()');
+    assert.ok(
+      /chatOpen[^]*?chatText|chatText[^]*?chatOpen/.test(m[1]),
+      'chat 分支必须是「开着且有未发送文本」两个条件同时成立',
+    );
+    assert.ok(
+      /onInput: \(text\) => \{[^]{0,200}syncInputBusy\(\)/.test(sprite),
+      '文本变化必须重新上报 busy（chat.ts 的 input 事件经 onInput 回调到这里）',
+    );
+    assert.ok(/this\.chatText = ''/.test(sprite), '弹窗关闭必须清掉未发送文本（下次打开是空弹窗，不拦隐藏）');
+  });
 });
